@@ -1,0 +1,89 @@
+name: moodle-local-stack
+
+x-moodle-env: &moodle-env
+  MOODLE_DB_HOST: db
+  MYSQL_DATABASE: ${MYSQL_DATABASE}
+  MYSQL_USER: ${MYSQL_USER}
+  MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+  MOODLE_WWWROOT: ${MOODLE_WWWROOT:-http://localhost:8080}
+  MOODLE_SITE_NAME: ${MOODLE_SITE_NAME:-Moodle local stack}
+  MOODLE_ADMIN_EMAIL: ${MOODLE_ADMIN_EMAIL}
+
+services:
+  db:
+    image: mysql:8.4.11
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      ANALYTICS_DB_USER: ${ANALYTICS_DB_USER}
+      ANALYTICS_DB_PASSWORD: ${ANALYTICS_DB_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./docker/db/10-analytics-user.sh:/docker-entrypoint-initdb.d/10-analytics-user.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks:
+      - backend
+
+  moodle:
+    image: moodle-local-stack/moodle:${MOODLE_VERSION:-v5.3.0}
+    build:
+      context: .
+      dockerfile: docker/moodle/Dockerfile
+      args:
+        MOODLE_VERSION: ${MOODLE_VERSION:-v5.3.0}
+    restart: unless-stopped
+    environment:
+      <<: *moodle-env
+      MOODLE_ADMIN_PASSWORD: ${MOODLE_ADMIN_PASSWORD}
+    volumes:
+      - moodledata:/var/www/moodledata
+    ports:
+      - "${MOODLE_PORT:-8080}:80"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sS -o /dev/null http://localhost/"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 300s
+    networks:
+      - frontend
+      - backend
+
+  cron:
+    image: moodle-local-stack/moodle:${MOODLE_VERSION:-v5.3.0}
+    restart: unless-stopped
+    command: ["cron"]
+    environment:
+      <<: *moodle-env
+    volumes:
+      - moodledata:/var/www/moodledata
+    depends_on:
+      db:
+        condition: service_healthy
+      moodle:
+        condition: service_started
+    networks:
+      - backend
+
+networks:
+  frontend:
+  backend:
+    internal: true
+
+volumes:
+  db_data:
+  moodledata:
