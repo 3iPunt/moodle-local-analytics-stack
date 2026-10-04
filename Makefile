@@ -7,7 +7,7 @@ COMPOSE_ALL := COMPOSE_PROFILES=cpu,gpu,init docker compose
 
 .DEFAULT_GOAL := help
 
-.PHONY: help env build up down logs clean init-model demo-data export sql ask test test-analytics smoke
+.PHONY: help env build up down logs clean init-model demo-data export sql ask bench test test-analytics smoke
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -43,8 +43,14 @@ sql: ## Read-only query on the export, usage: make sql Q="SELECT ..."
 	@test -n "$(Q)" || { echo 'usage: make sql Q="SELECT ..."'; exit 2; }
 	@$(COMPOSE) exec -T analytics python -m app.sqlshell "$(Q)"
 
-ask: ## Ask a question, usage: make ask Q="..."
-	@echo "ask: not implemented yet (phase d)"; exit 1
+ask: ## Ask a question, usage: make ask Q="..." [COURSES=2,3,4]
+	@test -n "$(Q)" || { echo 'usage: make ask Q="..." [COURSES=2,3,4]'; exit 2; }
+	@$(COMPOSE) exec -T analytics python -m app.cli ask "$(Q)" $(if $(COURSES),--course-ids $(COURSES))
+
+bench: ## Run the six demo questions and write docs/benchmark.md
+	$(COMPOSE) exec -T analytics python -m app.cli bench --markdown /tmp/benchmark.md
+	$(COMPOSE) exec -T analytics cat /tmp/benchmark.md > docs/benchmark.md
+	@echo "Wrote docs/benchmark.md"
 
 test: test-analytics ## Run the test suite
 
