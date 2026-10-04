@@ -92,7 +92,7 @@ test-analytics: ## Run the analytics unit and integration tests inside the conta
 	@epoch="$$($(COMPOSE) exec -T moodle runuser -u www-data -- php /var/www/html/admin/cli/cfg.php \
 		--component=local_stackdemo --name=variety_applied 2>/dev/null | tr -d '[:space:]')"; \
 	echo "DEMO_NOW_EPOCH=$${epoch:-unset}"; \
-	$(COMPOSE) exec -T -e DEMO_NOW_EPOCH="$$epoch" analytics pytest -q
+	$(COMPOSE) exec -T -e DEMO_NOW_EPOCH="$$epoch" analytics pytest -q -m "not docker"
 
 # PHPUnit runs as www-data with tables prefixed phpu_ in the Moodle database and dataroot
 # /var/www/phpunitdata (volume). init.php runs only when util.php --diag reports that the
@@ -110,5 +110,8 @@ test-plugin: ## Run the local_askdata PHPUnit tests inside the moodle container
 		fi; \
 		vendor/bin/phpunit --testsuite local_askdata_testsuite'
 
-smoke: ## Run the end-to-end smoke test
-	@echo "smoke: not implemented yet (phase f)"; exit 1
+smoke: ## Prove isolation, auth, scoping and the plugin end to end (needs the running stack)
+	./scripts/smoke.sh
+	@if [ -x analytics/.venv/bin/pytest ]; then \
+		cd analytics && STACK_SMOKE=1 .venv/bin/pytest -q tests/test_isolation.py; \
+	else echo "skip host-side isolation test: analytics/.venv/bin/pytest not found"; fi
