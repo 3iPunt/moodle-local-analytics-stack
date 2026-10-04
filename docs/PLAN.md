@@ -30,6 +30,19 @@ Demo for the talk "Your data, your infrastructure: local AI and open-source anal
 4. DuckDB `mysql_scanner` must be installed at image build time (runtime has no internet). Fallback: `pymysql` + Parquet (`EXPORT_FORMAT=parquet`).
 5. Moodle generator `maketestsite` is slow. Use `maketestcourse` several times plus a custom variety script.
 
+## Networks
+
+| Network | Internal | Members | Purpose |
+|---|---|---|---|
+| `frontend` | no | proxy | Publishes `127.0.0.1:${MOODLE_PORT}`. The proxy is the only container with egress. |
+| `web` | yes | proxy, moodle | Proxy to Moodle. |
+| `backend` | yes, subnet `${BACKEND_SUBNET:-172.28.0.0/24}` | db, moodle, cron, analytics, ollama | Application traffic. |
+| `egress` | no | model-init | One-shot model download only. |
+
+Docker only publishes ports on non-internal networks, so Moodle cannot keep a published port without also getting a route to the internet. The nginx proxy (`docker/proxy/default.conf`) takes the published port and forwards `Host` unchanged (`$http_host`, which keeps `:8080`), so `wwwroot` stays `http://localhost:8080` and Moodle needs no reverse proxy settings. Verified 2026-10-04: moodle, cron, analytics, ollama and db time out on DNS and on a direct IP (1.1.1.1); the proxy reaches the internet, which is expected because it only forwards to Moodle.
+
+`BACKEND_SUBNET` is pinned so Moodle's curl security can allow exactly that range. Override it in `.env` when it overlaps a network on the host (on the dev machine `172.28.0.0/16` belongs to another project, so `.env` uses `172.30.0.0/24`).
+
 ## Phases
 
 Each phase ends with a verification run and a commit.
