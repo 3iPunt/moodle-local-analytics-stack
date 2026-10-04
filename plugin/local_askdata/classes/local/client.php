@@ -215,6 +215,13 @@ class client {
             throw new service_exception('error_signature', $reason, $status);
         }
 
+        if ($status === 502 && $reason === 'model_unavailable') {
+            throw new service_exception('error_model_unavailable', $reason, $status);
+        }
+        if ($status === 504) {
+            throw new service_exception('error_timeout', $reason, $status);
+        }
+
         $message = trim(clean_param($message, PARAM_TEXT));
         if ($message === '' || $status >= 500) {
             // Server errors may carry internal details, so they are not shown verbatim.

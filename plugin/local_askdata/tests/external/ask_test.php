@@ -219,6 +219,59 @@ final class ask_test extends \advanced_testcase {
     }
 
     /**
+     * A 502 with reason model_unavailable gets its own message.
+     */
+    public function test_model_unavailable_has_dedicated_message(): void {
+        [$teacher, $c1] = $this->setup_courses();
+        $this->setUser($teacher);
+        client::set_test_response(502, json_encode(['detail' => ['reason' => 'model_unavailable', 'message' => 'runner died: /internal/path']]));
+
+        try {
+            ask::execute((int) $c1->id, 'Anything');
+            $this->fail('Expected service_exception');
+        } catch (service_exception $e) {
+            $this->assertSame('error_model_unavailable', $e->errorcode);
+            $this->assertSame('model_unavailable', $e->reason);
+            $this->assertSame(502, $e->status);
+            $this->assertStringContainsString('Ollama', $e->getMessage());
+            $this->assertStringNotContainsString('/internal/path', $e->getMessage());
+        }
+    }
+
+    /**
+     * Any other 502 stays generic.
+     */
+    public function test_other_bad_gateway_is_generic(): void {
+        [$teacher, $c1] = $this->setup_courses();
+        $this->setUser($teacher);
+        client::set_test_response(502, json_encode(['detail' => ['reason' => 'upstream', 'message' => 'x']]));
+
+        try {
+            ask::execute((int) $c1->id, 'Anything');
+            $this->fail('Expected service_exception');
+        } catch (service_exception $e) {
+            $this->assertSame('error_service_generic', $e->errorcode);
+        }
+    }
+
+    /**
+     * A 504 maps to the timeout message.
+     */
+    public function test_gateway_timeout_maps_to_timeout_message(): void {
+        [$teacher, $c1] = $this->setup_courses();
+        $this->setUser($teacher);
+        client::set_test_response(504, json_encode(['detail' => ['reason' => 'timeout', 'message' => 'model took too long']]));
+
+        try {
+            ask::execute((int) $c1->id, 'Anything');
+            $this->fail('Expected service_exception');
+        } catch (service_exception $e) {
+            $this->assertSame('error_timeout', $e->errorcode);
+            $this->assertSame(504, $e->status);
+        }
+    }
+
+    /**
      * A rejected signature maps to the signature error.
      */
     public function test_signature_error(): void {

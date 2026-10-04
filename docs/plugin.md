@@ -34,5 +34,5 @@ The image installs Composer dev dependencies at build time (the container has no
 ## Known limits
 
 - The page shows the SQL and the table only. The service does not write an explanation of the answer.
-- The model needs more memory than the 8 GB development machine has free while MySQL and Moodle run. On that machine `/ask` answers 502 `model_unavailable`, and the page shows the generic "could not answer this question" message. That message also suggests rephrasing, which does not help in this case.
+- The model needs more memory than the 8 GB development machine has free while MySQL and Moodle run. On that machine `/ask` answers 502 `model_unavailable`, and the page shows a dedicated message asking the administrator to check the Ollama service. A 504 shows a timeout message.
 - The demo students (`tool_generator_*`) have no password. To log in as one, set it with `php admin/cli/reset_password.php --username=tool_generator_000001 --password=... --ignore-password-policy` as `www-data`.
