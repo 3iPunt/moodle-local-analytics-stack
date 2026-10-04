@@ -7,7 +7,7 @@ COMPOSE_ALL := COMPOSE_PROFILES=cpu,gpu,init docker compose
 
 .DEFAULT_GOAL := help
 
-.PHONY: help env build up down logs clean init-model demo-data export sql ask bench test test-analytics smoke
+.PHONY: help env build up down logs clean init-model demo-data demo-reset export sql ask bench test test-analytics smoke
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -33,7 +33,26 @@ clean: ## Stop the stack and delete volumes (including downloaded models)
 init-model: env ## Download OLLAMA_MODEL into the models volume (needs internet)
 	docker compose --profile init run --rm model-init
 
-demo-data: ## Generate demo courses and users
+demo-data: ## Generate demo courses and users, then export
+	./scripts/demo-data.sh
+
+# Named volumes of this project except ollama_models, so the model is not downloaded again.
+DATA_VOLUMES := moodle-local-stack_db_data moodle-local-stack_moodledata moodle-local-stack_analytics_data
+
+demo-reset: env ## DESTROYS Moodle, MySQL and export data, then reinstalls and regenerates the demo
+	@echo "WARNING: demo-reset deletes this stack's Moodle site, database and export ($(DATA_VOLUMES))."
+	@echo "The Ollama model volume is kept. Press Ctrl-C within 10 seconds to abort."
+	@sleep 10
+	$(COMPOSE_ALL) down --remove-orphans
+	docker volume rm $(DATA_VOLUMES) 2>/dev/null || true
+	$(COMPOSE) up -d --build
+	@echo "Waiting for the analytics service to report healthy (Moodle installs first)"
+	@for i in $$(seq 1 120); do \
+		[ "$$(docker inspect -f '{{.State.Health.Status}}' moodle-local-stack-analytics-1 2>/dev/null)" = healthy ] && break; \
+		sleep 5; \
+	done; \
+	[ "$$(docker inspect -f '{{.State.Health.Status}}' moodle-local-stack-analytics-1 2>/dev/null)" = healthy ] \
+		|| { echo "analytics did not become healthy in 10 minutes" >&2; exit 1; }
 	./scripts/demo-data.sh
 
 export: ## Export Moodle data to DuckDB now and print row counts
@@ -54,8 +73,12 @@ bench: ## Run the six demo questions and write docs/benchmark.md
 
 test: test-analytics ## Run the test suite
 
+# Integration tests export "as of" the demo generation time so the documented facts do not drift.
 test-analytics: ## Run the analytics unit and integration tests inside the container
-	$(COMPOSE) exec -T analytics pytest -q
+	@epoch="$$($(COMPOSE) exec -T moodle runuser -u www-data -- php /var/www/html/admin/cli/cfg.php \
+		--component=local_stackdemo --name=variety_applied 2>/dev/null | tr -d '[:space:]')"; \
+	echo "DEMO_NOW_EPOCH=$${epoch:-unset}"; \
+	$(COMPOSE) exec -T -e DEMO_NOW_EPOCH="$$epoch" analytics pytest -q
 
 smoke: ## Run the end-to-end smoke test
 	@echo "smoke: not implemented yet (phase f)"; exit 1

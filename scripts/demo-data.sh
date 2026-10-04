@@ -65,4 +65,17 @@ export_start=$SECONDS
 docker compose exec -T analytics python -m app.export
 export_time=$((SECONDS - export_start))
 
+applied="$(as_www php admin/cli/cfg.php --component=local_stackdemo --name=variety_applied | tr -d '[:space:]')"
+if [[ "$applied" =~ ^[0-9]+$ ]]; then
+    age=$(( $(date +%s) - applied ))
+    echo "Demo data generated $((age / 3600))h $((age % 3600 / 60))m ago (variety_applied=$applied)"
+    if [ "$age" -gt $((3 * 86400)) ]; then
+        echo "WARNING: the demo data is older than 3 days. Live answers (make ask, the plugin) use the" >&2
+        echo "export time, so 'not logged in for 14 days' and similar facts have drifted from docs/demo-data.md." >&2
+        echo "Run 'make demo-reset' (destroys the stack data) within 3 days before the talk." >&2
+    fi
+else
+    echo "WARNING: local_stackdemo/variety_applied is not set" >&2
+fi
+
 echo "Timings: generator ${gen_time}s, variety ${variety_time}s, export ${export_time}s, total $((SECONDS - total_start))s"

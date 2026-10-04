@@ -1,32 +1,47 @@
-"""Every few-shot example passes the guard and answers on the live export.
+"""Every few-shot example passes the guard and answers on a demo export.
 
-Runs against /data/moodle.duckdb (the export the service serves); skipped when it
-is missing. Facts come from docs/demo-data.md.
+The export is built in a temporary directory "as of" ``DEMO_NOW_EPOCH`` (the
+generation time of the demo data, passed by ``make test``) so the facts from
+docs/demo-data.md hold however old the data is. Skipped without it or without
+a reachable MySQL.
 """
 
 import os
-from pathlib import Path
 
 import pytest
 
 from app.ask import load_examples
 from app.db import open_query_connection, run_guarded
 from app.demo_facts import DEMO_QUESTIONS, scope_names
+from app.export import export
 from app.schema import QUERY_TABLES
+from tests.test_integration import _mysql, _settings, demo_now_epoch
 
 pytestmark = pytest.mark.integration
 
-DB = Path(os.environ.get("DATA_DIR", "/data")) / "moodle.duckdb"
 ALL_COURSES = [2, 3, 4, 5, 6]
 EXAMPLES = load_examples()
 BY_ID = {e.id: e for e in EXAMPLES}
 
 
 @pytest.fixture(scope="module")
-def con():
-    if not DB.exists():
-        pytest.skip(f"{DB} not found; run the stack and `make demo-data`")
-    c = open_query_connection(str(DB), ALL_COURSES, QUERY_TABLES)
+def db(tmp_path_factory):
+    if not os.environ.get("ANALYTICS_DB_USER"):
+        pytest.skip("integration environment not configured")
+    now = demo_now_epoch()
+    settings = _settings(tmp_path_factory.mktemp("examples"), "duckdb")
+    try:
+        _mysql(settings).close()
+    except Exception as err:  # noqa: BLE001
+        pytest.skip(f"MySQL not reachable: {type(err).__name__}")
+    if export(settings, now_epoch=now).row_counts["course"] == 0:
+        pytest.skip("Moodle has no courses yet; run `make demo-data`")
+    return str(settings.db_path)
+
+
+@pytest.fixture(scope="module")
+def con(db):
+    c = open_query_connection(db, ALL_COURSES, QUERY_TABLES)
     yield c
     c.close()
 
@@ -81,10 +96,8 @@ def test_completion_ranking(con):
     assert [r[0] for r in rows] == ["DA101", "PROG101", "RM301", "DB201", "STAT201"]
 
 
-def test_teacher_scope_limits_rows():
-    if not DB.exists():
-        pytest.skip(f"{DB} not found")
-    c = open_query_connection(str(DB), [2, 3, 4], QUERY_TABLES)
+def test_teacher_scope_limits_rows(db):
+    c = open_query_connection(db, [2, 3, 4], QUERY_TABLES)
     try:
         _, rows, _ = run_guarded(c, BY_ID["courses_students"].sql, set(QUERY_TABLES), 500)
     finally:

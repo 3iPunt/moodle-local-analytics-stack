@@ -1,8 +1,10 @@
 """Export the running stack's Moodle and check the facts in docs/demo-data.md.
 
-Run inside the analytics container (``make test``) right after ``make demo-data``:
-days_since_last_access is relative to the export time, so the inactivity
-numbers drift once the demo data is several days old.
+Run inside the analytics container with ``make test``, which passes
+``DEMO_NOW_EPOCH`` (``local_stackdemo/variety_applied``, the time the demo data
+was generated). Exporting "as of" that time keeps days_since_* and the
+documented facts stable however old the data is. Skipped without it, or when
+Moodle has no courses yet.
 """
 
 import os
@@ -38,6 +40,13 @@ def _mysql(settings):
     )
 
 
+def demo_now_epoch() -> int:
+    raw = os.environ.get("DEMO_NOW_EPOCH", "").strip()
+    if not raw.isdigit() or int(raw) == 0:
+        pytest.skip("DEMO_NOW_EPOCH (local_stackdemo/variety_applied) is unset; run `make demo-data` and `make test`")
+    return int(raw)
+
+
 @pytest.fixture(scope="session")
 def exports(tmp_path_factory):
     if not os.environ.get("ANALYTICS_DB_USER"):
@@ -47,8 +56,12 @@ def exports(tmp_path_factory):
         _mysql(duck).close()
     except Exception as err:  # noqa: BLE001
         pytest.skip(f"MySQL not reachable: {type(err).__name__}")
+    now = demo_now_epoch()
     parquet = _settings(tmp_path_factory.mktemp("parquet"), "parquet")
-    return {"duckdb": (duck, export(duck)), "parquet": (parquet, export(parquet))}
+    result = export(duck, now_epoch=now)
+    if result.row_counts["course"] == 0:
+        pytest.skip("Moodle has no courses yet; run `make demo-data`")
+    return {"duckdb": (duck, result), "parquet": (parquet, export(parquet, now_epoch=now))}
 
 
 @pytest.fixture(scope="session")
@@ -207,6 +220,23 @@ def test_parquet_mode_matches_duckdb_mode(con, exports):
         assert shape(other) == shape(con)
     finally:
         other.close()
+    meta = "SELECT exported_at FROM base.export_meta"
+    assert con.execute(meta).fetchone() == other_meta(pq_settings, meta)
     files = sorted(p.name for p in (pq_settings.data_dir / "parquet").iterdir())
     assert files == sorted(f"{t}.parquet" for t in (*TABLES, "export_meta"))
     assert not list(pq_settings.data_dir.glob(".staging-*"))
+
+
+def other_meta(settings, sql):
+    c = duckdb.connect(str(settings.db_path), read_only=True)
+    try:
+        return c.execute(sql).fetchone()
+    finally:
+        c.close()
+
+
+def test_export_is_pinned_to_the_generation_time(con):
+    import datetime as dt
+
+    exported_at = con.execute("SELECT exported_at FROM base.export_meta").fetchone()[0]
+    assert exported_at == dt.datetime.fromtimestamp(demo_now_epoch(), dt.timezone.utc).replace(tzinfo=None)

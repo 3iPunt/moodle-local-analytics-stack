@@ -5,10 +5,17 @@
 1. Creates five courses with Moodle's own generator (`public/admin/tool/generator/cli/maketestcourse.php --size=S`). Courses whose shortname already exists are skipped.
 2. Runs `scripts/moodle/variety.php` inside the moodle container (mounted read-only at `/opt/stack/scripts`).
 3. Runs cron once and purges caches.
+4. Exports to DuckDB, then prints how long ago the data was generated and warns when that is more than 3 days.
 
 The run is idempotent. variety.php writes `local_stackdemo/variety_applied` to `mdl_config_plugins` when it finishes and exits early on later runs, printing the same summary. If it ever fails halfway, reset with `make clean && make up && make demo-data`.
 
 Every number below comes from SQL run against the database after a clean `make clean && make up && make demo-data` on 2026-10-04, using the read-only `ANALYTICS_DB_USER`. Dates are relative to the run time, so absolute timestamps will differ on another day, but the counts and percentages are the same: everything is seeded with `mt_srand(42)`.
+
+## Freshness: reset within 3 days before the talk
+
+variety.php places every date relative to the moment it ran (`variety_applied`), but live answers (`make ask`, the plugin) compute `days_since_last_access` and similar columns from the export time. The facts below therefore drift a little every day: after a few days some students cross the 14-day line and the answers no longer match this page. Run `make demo-reset` within 3 days before the talk. It deletes this stack's Moodle, MySQL and export volumes (the Ollama model is kept), reinstalls Moodle, waits for the analytics service, and runs `make demo-data`, which ends with an export.
+
+The integration tests are not affected: `make test` reads `variety_applied` and exports "as of" that time, so they check these exact numbers whatever the age of the data.
 
 ## What the generator creates
 
