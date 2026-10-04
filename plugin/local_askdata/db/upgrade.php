@@ -15,24 +15,26 @@
 // along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * External functions for local_askdata.
+ * Upgrade steps for local_askdata.
  *
  * @package    local_askdata
  * @copyright  2026 Antoni Bertran
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
-defined('MOODLE_INTERNAL') || die();
-
-$functions = [
-    'local_askdata_ask' => [
-        'classname' => \local_askdata\external\ask::class,
-        'description' => 'Ask a natural-language question about the data of the courses the user can analyse.',
-        'type' => 'read',
-        'ajax' => true,
-        'loginrequired' => true,
-        'capabilities' => 'local/askdata:ask',
-        // An answer can take minutes; do not hold the session lock meanwhile.
-        'readonlysession' => true,
-    ],
-];
+/**
+ * Runs the upgrade steps.
+ *
+ * @param int $oldversion Version installed before this upgrade.
+ * @return bool
+ */
+function xmldb_local_askdata_upgrade($oldversion) {
+    if ($oldversion < 2026100401) {
+        // The old 60 s default gave up before the service; move sites still on it to the new default.
+        if ((int) get_config('local_askdata', 'timeout') === 60) {
+            set_config('timeout', \local_askdata\local\client::DEFAULT_TIMEOUT, 'local_askdata');
+        }
+        upgrade_plugin_savepoint(true, 2026100401, 'local', 'askdata');
+    }
+    return true;
+}

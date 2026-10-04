@@ -46,7 +46,7 @@ if ($hassiteconfig) {
         'local_askdata/timeout',
         new lang_string('timeout', 'local_askdata'),
         new lang_string('timeout_desc', 'local_askdata'),
-        60,
+        \local_askdata\local\client::DEFAULT_TIMEOUT,
         PARAM_INT
     ));
 

@@ -272,6 +272,65 @@ final class ask_test extends \advanced_testcase {
     }
 
     /**
+     * A curl timeout maps to the timeout message, not to "unreachable".
+     */
+    public function test_curl_timeout_maps_to_timeout_message(): void {
+        [$teacher, $c1] = $this->setup_courses();
+        $this->setUser($teacher);
+        client::set_test_response(0, '', 28);
+
+        try {
+            ask::execute((int) $c1->id, 'Anything');
+            $this->fail('Expected service_exception');
+        } catch (service_exception $e) {
+            $this->assertSame('error_timeout', $e->errorcode);
+            $this->assertSame('timeout', $e->reason);
+        }
+    }
+
+    /**
+     * A 503 busy maps to the busy message.
+     */
+    public function test_busy_maps_to_busy_message(): void {
+        [$teacher, $c1] = $this->setup_courses();
+        $this->setUser($teacher);
+        client::set_test_response(503, json_encode(['detail' => ['reason' => 'busy', 'message' => 'try again shortly']]));
+
+        try {
+            ask::execute((int) $c1->id, 'Anything');
+            $this->fail('Expected service_exception');
+        } catch (service_exception $e) {
+            $this->assertSame('error_busy', $e->errorcode);
+            $this->assertSame('busy', $e->reason);
+            $this->assertSame(503, $e->status);
+        }
+    }
+
+    /**
+     * Any other 503 stays generic.
+     */
+    public function test_other_service_unavailable_is_generic(): void {
+        [$teacher, $c1] = $this->setup_courses();
+        $this->setUser($teacher);
+        client::set_test_response(503, json_encode(['status' => 'starting', 'db_file' => false]));
+
+        try {
+            ask::execute((int) $c1->id, 'Anything');
+            $this->fail('Expected service_exception');
+        } catch (service_exception $e) {
+            $this->assertSame('error_service_generic', $e->errorcode);
+        }
+    }
+
+    /**
+     * The external function releases the session lock while it waits for the service.
+     */
+    public function test_function_uses_a_readonly_session(): void {
+        $info = external_api::external_function_info('local_askdata_ask');
+        $this->assertTrue($info->readonlysession);
+    }
+
+    /**
      * A rejected signature maps to the signature error.
      */
     public function test_signature_error(): void {

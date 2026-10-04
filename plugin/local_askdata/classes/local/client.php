@@ -27,6 +27,12 @@ class client {
     /** @var int Connection timeout in seconds. */
     public const CONNECT_TIMEOUT = 5;
 
+    /** @var int Default request timeout in seconds, above the service's OLLAMA_TIMEOUT_S (150). */
+    public const DEFAULT_TIMEOUT = 180;
+
+    /** @var int curl error number for an operation timeout (CURLE_OPERATION_TIMEDOUT). */
+    protected const CURLE_OPERATION_TIMEDOUT = 28;
+
     /** @var int Maximum length of an error message coming from the service. */
     protected const MAX_MESSAGE_LENGTH = 300;
 
@@ -54,7 +60,7 @@ class client {
         /** @var string Shared HMAC secret. */
         protected string $secret,
         /** @var int Request timeout in seconds. */
-        protected int $timeout = 60,
+        protected int $timeout = self::DEFAULT_TIMEOUT,
         /** @var int Maximum number of rows. */
         protected int $maxrows = 200,
         ?callable $curlfactory = null,
@@ -75,9 +81,9 @@ class client {
         if ($url === '' || $secret === '') {
             throw new service_exception('error_notconfigured', 'not_configured');
         }
-        $timeout = (int) ($config->timeout ?? 60);
+        $timeout = (int) ($config->timeout ?? self::DEFAULT_TIMEOUT);
         $maxrows = (int) ($config->maxrows ?? 200);
-        return new self($url, $secret, $timeout > 0 ? $timeout : 60, $maxrows > 0 ? $maxrows : 200);
+        return new self($url, $secret, $timeout > 0 ? $timeout : self::DEFAULT_TIMEOUT, $maxrows > 0 ? $maxrows : 200);
     }
 
     /**
@@ -141,6 +147,9 @@ class client {
         [$status, $raw, $errno] = $this->send($url, $headers, $body);
         $localelapsed = (int) round((microtime(true) - $start) * 1000);
 
+        if ($errno === self::CURLE_OPERATION_TIMEDOUT) {
+            throw new service_exception('error_timeout', 'timeout', 0, null, 'curl errno ' . $errno);
+        }
         if ($errno !== 0 || $status === 0) {
             throw new service_exception('error_unreachable', 'unreachable', 0, null, 'curl errno ' . $errno);
         }
@@ -217,6 +226,9 @@ class client {
 
         if ($status === 502 && $reason === 'model_unavailable') {
             throw new service_exception('error_model_unavailable', $reason, $status);
+        }
+        if ($status === 503 && $reason === 'busy') {
+            throw new service_exception('error_busy', $reason, $status);
         }
         if ($status === 504) {
             throw new service_exception('error_timeout', $reason, $status);

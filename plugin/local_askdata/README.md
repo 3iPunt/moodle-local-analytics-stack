@@ -16,7 +16,7 @@ Site administration > Plugins > Local plugins > Ask your data.
 |---|---|---|
 | `serviceurl` | `http://analytics:8000` | Base URL, without `/ask`. |
 | `sharedsecret` | empty | Must match `ASKDATA_SHARED_SECRET` on the service. The plugin refuses to call the service while it is empty. |
-| `timeout` | 60 | Seconds. The connect timeout is fixed at 5 seconds. |
+| `timeout` | 180 | Seconds. Keep it above `OLLAMA_TIMEOUT_S` on the service (150), so the service gives up first. The connect timeout is fixed at 5 seconds. Sites upgraded from the old 60 s default move to 180. |
 | `maxrows` | 200 | Sent as `max_rows`. The service applies the lower of this and its own limit. Moodle also cuts the rows and sets `truncated`. |
 
 From the CLI (run from the Moodle root, `/var/www/html` in the stack):
