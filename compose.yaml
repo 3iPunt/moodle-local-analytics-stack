@@ -69,6 +69,7 @@ services:
     init: true
     volumes:
       - moodledata:/var/www/moodledata
+      - phpunitdata:/var/www/phpunitdata
       - ./scripts/moodle:/opt/stack/scripts:ro
     depends_on:
       db:
@@ -229,5 +230,6 @@ networks:
 volumes:
   db_data:
   moodledata:
+  phpunitdata:
   analytics_data:
   ollama_models:

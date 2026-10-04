@@ -7,7 +7,7 @@ COMPOSE_ALL := COMPOSE_PROFILES=cpu,gpu,init docker compose
 
 .DEFAULT_GOAL := help
 
-.PHONY: help env build up down logs clean init-model demo-data demo-reset configure-plugin export sql ask bench test test-analytics smoke
+.PHONY: help env build up down logs clean init-model demo-data demo-reset configure-plugin export sql ask bench test test-analytics test-plugin smoke
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -85,7 +85,7 @@ bench: ## Run the six demo questions and write docs/benchmark.md
 	$(COMPOSE) exec -T analytics cat /tmp/benchmark.md > docs/benchmark.md
 	@echo "Wrote docs/benchmark.md"
 
-test: test-analytics ## Run the test suite
+test: test-analytics test-plugin ## Run the analytics and plugin test suites
 
 # Integration tests export "as of" the demo generation time so the documented facts do not drift.
 test-analytics: ## Run the analytics unit and integration tests inside the container
@@ -93,6 +93,20 @@ test-analytics: ## Run the analytics unit and integration tests inside the conta
 		--component=local_stackdemo --name=variety_applied 2>/dev/null | tr -d '[:space:]')"; \
 	echo "DEMO_NOW_EPOCH=$${epoch:-unset}"; \
 	$(COMPOSE) exec -T -e DEMO_NOW_EPOCH="$$epoch" analytics pytest -q
+
+# PHPUnit runs as www-data with tables prefixed phpu_ in the Moodle database and dataroot
+# /var/www/phpunitdata (volume). init.php runs only when util.php --diag reports that the
+# test site is missing or outdated; --disable-composer keeps it offline (vendor/ is in the image).
+PHPUNIT_CLI := public/admin/tool/phpunit/cli
+test-plugin: ## Run the local_askdata PHPUnit tests inside the moodle container
+	@$(COMPOSE) exec -T -w /var/www/html moodle runuser -u www-data -- bash -c '\
+		if php $(PHPUNIT_CLI)/util.php --diag >/dev/null 2>&1; then \
+			echo "PHPUnit test site is initialised"; \
+		else \
+			echo "Initialising the PHPUnit test site (first run takes a few minutes)"; \
+			php $(PHPUNIT_CLI)/init.php --disable-composer || exit $$?; \
+		fi; \
+		vendor/bin/phpunit --testsuite local_askdata_testsuite'
 
 smoke: ## Run the end-to-end smoke test
 	@echo "smoke: not implemented yet (phase f)"; exit 1

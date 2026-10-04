@@ -66,7 +66,9 @@ write_config() {
         $out .= "\$CFG->directorypermissions = 02777;\n";
         $out .= "\$CFG->routerconfigured = true;\n";
         $out .= "\$CFG->disableupdatenotifications = true;\n";
-        $out .= "\$CFG->disableupdateautodeploy = true;\n\n";
+        $out .= "\$CFG->disableupdateautodeploy = true;\n";
+        $out .= "\$CFG->phpunit_prefix = \"phpu_\";\n";
+        $out .= "\$CFG->phpunit_dataroot = \"/var/www/phpunitdata\";\n\n";
         $out .= "require_once(__DIR__ . \"/lib/setup.php\");\n";
         file_put_contents("/var/www/html/config.php", $out);
     '
@@ -106,6 +108,7 @@ run_cron() {
 }
 
 chown www-data:www-data "$DATAROOT"
+if [ -d /var/www/phpunitdata ]; then chown www-data:www-data /var/www/phpunitdata; fi
 export APACHE_DOCUMENT_ROOT="$DIRROOT"
 
 wait_for_db
