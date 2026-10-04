@@ -28,8 +28,8 @@ def _order(name: str) -> tuple[int, str]:
     return (TABLE_ORDER.index(name) if name in TABLE_ORDER else len(TABLE_ORDER), name)
 
 
-def describe_schema(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
-    """Tables of the ``base`` schema with column types and comments."""
+def describe_schema(conn: duckdb.DuckDBPyConnection, schema: str = BASE_SCHEMA) -> list[dict[str, Any]]:
+    """Tables of ``schema`` with column types and comments."""
     rows = conn.execute(
         """
         SELECT t.table_name, coalesce(t.comment, ''), c.column_name, c.data_type, coalesce(c.comment, '')
@@ -38,7 +38,7 @@ def describe_schema(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
         WHERE t.schema_name = ? AND t.database_name = current_database() AND NOT t.temporary
         ORDER BY t.table_name, c.column_index
         """,
-        [BASE_SCHEMA],
+        [schema],
     ).fetchall()
     tables: dict[str, dict[str, Any]] = {}
     for table, table_comment, column, data_type, column_comment in rows:

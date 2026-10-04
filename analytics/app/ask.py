@@ -27,7 +27,7 @@ from typing import Any, Protocol
 import duckdb
 import yaml
 
-from app.db import QueryTimeout, open_query_connection, run_guarded
+from app.db import QUERY_SCHEMA, QueryTimeout, open_query_connection, run_guarded
 from app.guard import GuardError, extract_sql_from_model_output
 from app.schema import QUERY_TABLES, describe_schema, schema_as_prompt_text
 
@@ -307,7 +307,7 @@ def answer(
     start = clock()
     con = open_query_connection(db_path, course_ids, tables)
     try:
-        schema = [t for t in describe_schema(con) if t["name"] in allowed]
+        schema = [t for t in describe_schema(con, QUERY_SCHEMA) if t["name"] in allowed]
         messages = build_messages(schema_as_prompt_text(schema), select_examples(question, examples, top_k), question)
         model_ms = sql_ms = 0.0
         calls: list[dict[str, Any]] = []

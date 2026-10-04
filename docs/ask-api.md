@@ -71,7 +71,7 @@ Errors use `{"detail": {"reason": "...", "message": "..."}}`. The message is mea
 
 1. The prompt starts with fixed rules and the schema, the same for every request, so Ollama reuses that part of its KV cache.
 2. Then come the `EXAMPLES_TOP_K` examples from `analytics/examples.yaml` whose words overlap most with the question (Jaccard over word sets), closest one last.
-3. Ollama answers with `temperature` 0 and `num_ctx` `OLLAMA_NUM_CTX`. The SQL goes through the guard and runs on a read-only DuckDB connection whose views contain only `course_ids`.
+3. Ollama answers with `temperature` 0 and `num_ctx` `OLLAMA_NUM_CTX`. The SQL goes through the guard and runs on a private in-memory DuckDB connection. Before the model is called, the service attaches the export read-only, copies only the rows of `course_ids` into plain tables, and detaches it, so rows of other courses never exist on that connection. External access is then disabled and the configuration locked, with `DUCKDB_MEMORY_LIMIT` (default 512MB), `DUCKDB_THREADS` (default 2) and no spilling to disk (`DUCKDB_MAX_TEMP_SIZE`, default 0B). The connection is writable, but only its own copy: a statement that got past the guard could not change the export.
 4. If the guard or DuckDB rejects it, the model gets one more turn with the failed SQL and the error message.
 
 Each request logs one line at INFO with `user_ref`, the number of courses, attempts, elapsed time and outcome. The question text is logged only at DEBUG.

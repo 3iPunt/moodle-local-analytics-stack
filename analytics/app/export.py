@@ -23,9 +23,11 @@ into a TEMP macro, which DuckDB never persists, and is scrubbed from errors.
 Publishing: the build writes ``moodle.duckdb.tmp``, checkpoints it, closes it
 and ``os.replace``s it onto ``moodle.duckdb``. Readers already holding the old
 file keep reading the old inode until they close; new connections see the new
-file. DuckDB caches one database instance per path inside a process, so a new
-connection opened while an old one is still open reuses the old snapshot:
-readers must open a connection per request and close it.
+file. DuckDB caches one database instance per path inside a process, so a
+``duckdb.connect(path)`` opened while an old one is still open reuses the old
+snapshot: direct readers (/health, /schema, CLI) open a connection per call and
+close it. Query connections (app/db.py) ATTACH the file into a private in-memory
+database instead, which bypasses that cache and always sees the latest file.
 
 An exclusive ``flock`` on ``/data/.export.lock`` serialises exports across
 threads, processes and containers that share the volume.
