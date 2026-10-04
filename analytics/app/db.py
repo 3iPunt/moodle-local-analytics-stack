@@ -14,6 +14,10 @@ from app.guard import validate_sql
 BASE_SCHEMA = "base"
 DEFAULT_TIMEOUT_S = 30.0
 
+# Every reader in a process must use the same config: DuckDB caches one instance
+# per path and refuses a second connection with a different configuration.
+READER_CONFIG = {"enable_external_access": False, "lock_configuration": True}
+
 _IDENT_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 
@@ -48,11 +52,7 @@ def open_query_connection(
     """
     ids = _course_ids(course_ids)
     predicate_values = ", ".join(str(i) for i in ids)
-    con = duckdb.connect(
-        db_path,
-        read_only=True,
-        config={"enable_external_access": False, "lock_configuration": True},
-    )
+    con = duckdb.connect(db_path, read_only=True, config=dict(READER_CONFIG))
     try:
         for view, column in tables_with_course_id.items():
             source = f"{BASE_SCHEMA}.{_ident(view)}"
