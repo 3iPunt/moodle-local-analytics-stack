@@ -9,6 +9,29 @@ x-moodle-env: &moodle-env
   MOODLE_SITE_NAME: ${MOODLE_SITE_NAME:-Moodle local stack}
   MOODLE_ADMIN_EMAIL: ${MOODLE_ADMIN_EMAIL}
 
+# Shared by the CPU and GPU runtime services. Only one of them runs (profile cpu or gpu);
+# both answer as `ollama` on backend, so OLLAMA_URL does not depend on the profile.
+x-ollama: &ollama
+  image: ollama/ollama:0.35.1
+  restart: unless-stopped
+  environment:
+    OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+    OLLAMA_NUM_PARALLEL: "1"
+    OLLAMA_MAX_LOADED_MODELS: "1"
+  volumes:
+    - ollama_models:/root/.ollama
+  # The image has no curl or wget; the CLI talks to the local server.
+  healthcheck:
+    test: ["CMD", "ollama", "list"]
+    interval: 10s
+    timeout: 5s
+    retries: 10
+    start_period: 10s
+  networks:
+    backend:
+      aliases:
+        - ollama
+
 services:
   db:
     image: mysql:8.4.11
@@ -107,12 +130,43 @@ services:
     networks:
       - backend
 
+  ollama:
+    <<: *ollama
+    profiles: ["cpu"]
+
+  ollama-gpu:
+    <<: *ollama
+    profiles: ["gpu"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # One-shot download into the shared volume. It is the only Ollama container with
+  # internet access (egress) and it is never attached to backend.
+  model-init:
+    image: ollama/ollama:0.35.1
+    profiles: ["init"]
+    entrypoint: ["/bin/sh", "/opt/stack/model-init.sh"]
+    environment:
+      OLLAMA_MODEL: ${OLLAMA_MODEL}
+    volumes:
+      - ollama_models:/root/.ollama
+      - ./scripts/model-init.sh:/opt/stack/model-init.sh:ro
+    networks:
+      - egress
+
 networks:
   frontend:
   backend:
     internal: true
+  egress:
 
 volumes:
   db_data:
   moodledata:
   analytics_data:
+  ollama_models:

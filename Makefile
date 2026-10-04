@@ -1,5 +1,9 @@
 SHELL := /bin/bash
-COMPOSE := docker compose
+# Ollama runtime profile: cpu (default) or gpu (NVIDIA, `make up OLLAMA_PROFILE=gpu`).
+OLLAMA_PROFILE ?= cpu
+COMPOSE := COMPOSE_PROFILES=$(OLLAMA_PROFILE) docker compose
+# down/clean name every profile so no Ollama container is left behind.
+COMPOSE_ALL := COMPOSE_PROFILES=cpu,gpu,init docker compose
 
 .DEFAULT_GOAL := help
 
@@ -18,16 +22,16 @@ up: env ## Start the stack (installs Moodle on first run)
 	$(COMPOSE) up -d --build
 
 down: ## Stop the stack, keep volumes
-	$(COMPOSE) down
+	$(COMPOSE_ALL) down --remove-orphans
 
 logs: ## Follow logs of all services
 	$(COMPOSE) logs -f
 
-clean: ## Stop the stack and delete volumes
-	$(COMPOSE) down -v
+clean: ## Stop the stack and delete volumes (including downloaded models)
+	$(COMPOSE_ALL) down -v --remove-orphans
 
-init-model: ## Pull the Ollama model
-	@echo "init-model: not implemented yet (phase d)"; exit 1
+init-model: env ## Download OLLAMA_MODEL into the models volume (needs internet)
+	docker compose --profile init run --rm model-init
 
 demo-data: ## Generate demo courses and users
 	./scripts/demo-data.sh
