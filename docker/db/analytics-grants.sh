@@ -19,7 +19,10 @@ ident='^[A-Za-z0-9_]+$'
 for value in "$MYSQL_DATABASE" "$ANALYTICS_DB_USER"; do
     [[ "$value" =~ $ident ]] || { echo "invalid identifier: $value" >&2; exit 1; }
 done
-password="${ANALYTICS_DB_PASSWORD//\'/\'\'}"
+# gen-env.sh writes hex; anything else could break the SQL string or the DuckDB ATTACH string.
+[[ "$ANALYTICS_DB_PASSWORD" =~ ^[A-Za-z0-9_.-]+$ ]] \
+    || { echo "ANALYTICS_DB_PASSWORD may only contain letters, digits, '_', '.' and '-'" >&2; exit 1; }
+password="$ANALYTICS_DB_PASSWORD"
 account="'${ANALYTICS_DB_USER}'@'%'"
 
 sql="CREATE USER IF NOT EXISTS ${account} IDENTIFIED BY '${password}';

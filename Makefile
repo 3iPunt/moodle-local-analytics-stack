@@ -72,13 +72,17 @@ configure-plugin: env ## Set local_askdata settings and open Moodle curl securit
 export: ## Export Moodle data to DuckDB now and print row counts
 	$(COMPOSE) exec -T analytics python -m app.export
 
+# Exported so the recipes read them from the environment as "$$Q": a question with quotes,
+# $ or backticks reaches the CLI unchanged instead of being parsed by the shell.
+export Q COURSES
+
 sql: ## Read-only query on the export, usage: make sql Q="SELECT ..."
-	@test -n "$(Q)" || { echo 'usage: make sql Q="SELECT ..."'; exit 2; }
-	@$(COMPOSE) exec -T analytics python -m app.sqlshell "$(Q)"
+	@test -n "$$Q" || { echo 'usage: make sql Q="SELECT ..."'; exit 2; }
+	@$(COMPOSE) exec -T analytics python -m app.sqlshell "$$Q"
 
 ask: ## Ask a question, usage: make ask Q="..." [COURSES=2,3,4]
-	@test -n "$(Q)" || { echo 'usage: make ask Q="..." [COURSES=2,3,4]'; exit 2; }
-	@$(COMPOSE) exec -T analytics python -m app.cli ask "$(Q)" $(if $(COURSES),--course-ids $(COURSES))
+	@test -n "$$Q" || { echo 'usage: make ask Q="..." [COURSES=2,3,4]'; exit 2; }
+	@$(COMPOSE) exec -T analytics python -m app.cli ask "$$Q" $${COURSES:+--course-ids "$$COURSES"}
 
 bench: ## Run the six demo questions and write docs/benchmark.md
 	$(COMPOSE) exec -T analytics python -m app.cli bench --markdown /tmp/benchmark.md

@@ -205,8 +205,8 @@ def sign(ts, body):
     return hmac.new(SECRET.encode(), str(ts).encode() + b"\n" + body, hashlib.sha256).hexdigest()
 
 
-def call(method, path, body=b"", ts=None, signature=None, timeout=300):
-    headers = {"Content-Type": "application/json"}
+def call(method, path, body=b"", ts=None, signature=None, timeout=300, headers=None):
+    headers = {"Content-Type": "application/json", **(headers or {})}
     if ts is not None:
         headers["X-Askdata-Timestamp"] = str(ts)
         headers["X-Askdata-Signature"] = signature if signature is not None else sign(ts, body)
@@ -232,7 +232,28 @@ def ask_body(question):
 
 
 status, payload = call("GET", "/health")
-print(("PASS" if status == 200 else "FAIL") + f" analytics /health -> {status}")
+ok = status == 200 and payload == {"status": "ok"}
+print(("PASS" if ok else "FAIL") + f" unsigned /health -> {status} {json.dumps(payload)[:120]} (liveness only)")
+
+status, payload = call("GET", "/health", ts=int(time.time()))
+ok = status == 200 and isinstance(payload, dict) and "row_counts" in payload
+print(("PASS" if ok else "FAIL") + f" signed /health -> {status} with row counts: {ok}")
+
+status, payload = call("GET", "/schema")
+ok = status == 401 and reason(payload) == "missing_auth"
+print(("PASS" if ok else "FAIL") + f" unsigned /schema -> {status} {reason(payload)}")
+
+status, payload = call("GET", "/schema", ts=int(time.time()))
+ok = status == 200 and isinstance(payload, dict) and bool(payload.get("tables"))
+print(("PASS" if ok else "FAIL") + f" signed /schema -> {status}")
+
+status, payload = call("POST", "/ask", b"x" * (64 * 1024 + 1), ts=int(time.time()))
+ok = status == 413 and reason(payload) == "too_large"
+print(("PASS" if ok else "FAIL") + f" /ask with a body over 64 KiB -> {status} {reason(payload)}")
+
+status, payload = call("POST", "/ask", ask_body("hello"), ts="\u00b2", signature="0" * 64)
+ok = status == 401 and reason(payload) == "bad_signature"
+print(("PASS" if ok else "FAIL") + f" /ask with a non-ASCII digit timestamp -> {status} {reason(payload)}")
 
 status, payload = call("POST", "/refresh")
 print(("PASS" if status == 401 else "FAIL") + f" /refresh without signature -> {status} {reason(payload)}")
@@ -390,19 +411,29 @@ if [ "$(moodle_login "$JAR_S" "$STUDENT_USER" "$STUDENT_PASSWORD")" = ok ]; then
   pass "student $STUDENT_USER logs in"
   page=$(cu -s -b "$JAR_S" -w '\n%{http_code}' "$BASE/local/askdata/index.php?courseid=2")
   code=${page##*$'\n'}
-  if rg -q 'local_askdata/chat' <<<"$page"; then
+  # A login form means the session was lost, which would make the next checks pass for the wrong reason.
+  if rg -q 'name="logintoken"' <<<"$page"; then
+    fail "student: plugin page shows the login form (HTTP $code), the student session is not active"
+  elif rg -q 'local_askdata/chat' <<<"$page"; then
     fail "student: plugin page exposes local_askdata/chat (HTTP $code)"
   else
-    pass "student: plugin page does not contain local_askdata/chat (HTTP $code)"
+    pass "student: logged in, plugin page does not contain local_askdata/chat (HTTP $code)"
   fi
   sesskey=$(sesskey_of "$JAR_S" "$BASE/my/")
-  payload=$(printf '[{"index":0,"methodname":"local_askdata_ask","args":{"courseid":2,"question":"%s"}}]' "$QUESTION")
-  reply=$(cu -s -b "$JAR_S" -H 'Content-Type: application/json' --max-time 60 --data "$payload" \
-    "$BASE/lib/ajax/service.php?sesskey=$sesskey&info=local_askdata_ask" || true)
-  if rg -q '"error":true' <<<"$reply"; then
-    pass "student: AJAX local_askdata_ask is refused"
+  if [ -z "$sesskey" ]; then
+    fail "student: no sesskey found on /my/, the AJAX check cannot run"
   else
-    fail "student: AJAX local_askdata_ask was not refused: $(printf '%s' "$reply" | cut -c1-200)"
+    payload=$(printf '[{"index":0,"methodname":"local_askdata_ask","args":{"courseid":2,"question":"%s"}}]' "$QUESTION")
+    reply=$(cu -s -b "$JAR_S" -H 'Content-Type: application/json' --max-time 60 --data "$payload" \
+      "$BASE/lib/ajax/service.php?sesskey=$sesskey&info=local_askdata_ask" || true)
+    errorcode=$(python3 -c 'import json,sys; r=json.load(sys.stdin)[0]; print(r["exception"]["errorcode"] if r.get("error") else "none")' \
+      <<<"$reply" 2>/dev/null || echo unparsable)
+    case "$errorcode" in
+      nopermissions | required_capability_exception)
+        pass "student: AJAX local_askdata_ask is refused with $errorcode" ;;
+      *)
+        fail "student: AJAX local_askdata_ask not refused for missing capability (errorcode $errorcode): $(printf '%s' "$reply" | cut -c1-200)" ;;
+    esac
   fi
 else
   fail "student $STUDENT_USER could not log in"

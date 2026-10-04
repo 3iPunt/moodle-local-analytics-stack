@@ -97,10 +97,17 @@ install_if_needed() {
 }
 
 # Plugins bind-mounted from the host (local_askdata) may be newer than the database.
-# upgrade.php exits 0 with "no upgrade needed" when nothing changed.
+# upgrade.php exits 0 with "no upgrade needed" when nothing changed. A failed upgrade
+# must not keep the whole site down, so it only warns; Moodle then shows the pending
+# upgrade to administrators.
 upgrade_if_needed() {
     log "Running upgrade.php (no-op when nothing changed)"
-    as_www php "$APP_ROOT/admin/cli/upgrade.php" --non-interactive
+    local status=0
+    as_www php "$APP_ROOT/admin/cli/upgrade.php" --non-interactive || status=$?
+    if [ "$status" -ne 0 ]; then
+        log "WARNING: upgrade.php failed with status $status. Moodle starts anyway, but the database may be"
+        log "WARNING: older than the code. Fix the cause, then run: docker compose exec moodle runuser -u www-data -- php admin/cli/upgrade.php"
+    fi
 }
 
 # Idempotent; a missing secret must not keep Moodle down, so failures only warn.
