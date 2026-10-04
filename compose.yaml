@@ -48,6 +48,7 @@ services:
       MOODLE_ADMIN_PASSWORD: ${MOODLE_ADMIN_PASSWORD}
     volumes:
       - moodledata:/var/www/moodledata
+      - ./scripts/moodle:/opt/stack/scripts:ro
     ports:
       - "${MOODLE_PORT:-8080}:80"
     depends_on:

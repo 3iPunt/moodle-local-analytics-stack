@@ -30,7 +30,7 @@ init-model: ## Pull the Ollama model
 	@echo "init-model: not implemented yet (phase d)"; exit 1
 
 demo-data: ## Generate demo courses and users
-	@echo "demo-data: not implemented yet (phase b)"; exit 1
+	./scripts/demo-data.sh
 
 export: ## Export Moodle data to DuckDB
 	@echo "export: not implemented yet (phase c)"; exit 1
