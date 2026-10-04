@@ -184,8 +184,36 @@ def create_app(
             content={"status": "starting", "db_file": False, "refreshing": runner.busy},
         )
 
+    async def verify(request: Request, body: bytes | None = None) -> None:
+        """Check the HMAC headers over ``body`` (read from the request when None)."""
+        if body is None:
+            body = await request.body()
+        verify_request(
+            settings.askdata_secret,
+            request.headers.get(TIMESTAMP_HEADER),
+            request.headers.get(SIGNATURE_HEADER),
+            body,
+            settings.replay_window_s,
+        )
+
+    def is_signed(request: Request) -> bool:
+        return TIMESTAMP_HEADER in request.headers or SIGNATURE_HEADER in request.headers
+
     @app.get("/health")
-    def health():
+    async def health(request: Request):
+        # Unsigned: liveness only, for the container healthcheck. Signed: export details.
+        if not is_signed(request):
+            if not settings.db_path.exists():
+                return JSONResponse(status_code=503, content={"status": "starting"})
+            return {"status": "ok"}
+        try:
+            await verify(request)
+        except AskError as err:
+            log.info("health rejected outcome=%s", err.reason)
+            return ask_error(err)
+        return await run_in_threadpool(health_detail)
+
+    def health_detail():
         if not settings.db_path.exists():
             return no_export()
         try:
@@ -209,7 +237,15 @@ def create_app(
         }
 
     @app.get("/schema")
-    def schema(format: str = Query("json", pattern="^(json|text)$")):
+    async def schema(request: Request, format: str = Query("json", pattern="^(json|text)$")):
+        try:
+            await verify(request)
+        except AskError as err:
+            log.info("schema rejected outcome=%s", err.reason)
+            return ask_error(err)
+        return await run_in_threadpool(schema_body, format)
+
+    def schema_body(format: str):
         if not settings.db_path.exists():
             return no_export()
         con = reader()
@@ -226,13 +262,7 @@ def create_app(
     async def refresh(request: Request):
         # Same signature scheme as /ask, over the raw body (usually empty).
         try:
-            verify_request(
-                settings.askdata_secret,
-                request.headers.get(TIMESTAMP_HEADER),
-                request.headers.get(SIGNATURE_HEADER),
-                await request.body(),
-                settings.replay_window_s,
-            )
+            await verify(request)
         except AskError as err:
             log.info("refresh rejected outcome=%s", err.reason)
             return ask_error(err)

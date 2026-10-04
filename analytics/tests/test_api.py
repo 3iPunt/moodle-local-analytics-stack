@@ -20,10 +20,17 @@ ENV = {
 }
 
 
-def refresh(client, secret=API_SECRET, body=b""):
+def auth_headers(secret=API_SECRET, body=b""):
     ts = str(int(time.time()))
-    headers = {"X-Askdata-Timestamp": ts, "X-Askdata-Signature": sign(secret, ts, body)}
-    return client.post("/refresh", content=body, headers=headers)
+    return {"X-Askdata-Timestamp": ts, "X-Askdata-Signature": sign(secret, ts, body)}
+
+
+def refresh(client, secret=API_SECRET, body=b""):
+    return client.post("/refresh", content=body, headers=auth_headers(secret, body))
+
+
+def signed_get(client, path, secret=API_SECRET, **kw):
+    return client.get(path, headers=auth_headers(secret), **kw)
 
 
 def fake_export(settings):
@@ -40,13 +47,17 @@ def test_health_is_503_without_export_then_ok(settings):
     with TestClient(create_app(settings, export_fn=fake_export, refresh_on_startup=False)) as client:
         r = client.get("/health")
         assert r.status_code == 503
-        assert r.json()["db_file"] is False
+        assert r.json() == {"status": "starting"}
 
         r = refresh(client)
         assert r.status_code == 200
         assert r.json()["row_counts"]["course"] == 2
 
         r = client.get("/health")
+        assert r.status_code == 200
+        assert r.json() == {"status": "ok"}
+
+        r = signed_get(client, "/health")
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "ok" and body["db_file"] is True
@@ -113,16 +124,35 @@ def test_startup_retry_stops_on_shutdown(settings):
     assert not runner.ready.is_set()
 
 
+def test_detailed_health_requires_a_valid_signature(settings):
+    with TestClient(create_app(settings, export_fn=fake_export, refresh_on_startup=False)) as client:
+        refresh(client)
+        r = signed_get(client, "/health", secret="wrong")
+        assert r.status_code == 401 and r.json()["detail"]["reason"] == "bad_signature"
+        r = client.get("/health", headers={"X-Askdata-Timestamp": str(int(time.time()))})
+        assert r.status_code == 401 and r.json()["detail"]["reason"] == "missing_auth"
+        assert "row_counts" not in r.text
+
+
+def test_schema_requires_a_signature(settings):
+    with TestClient(create_app(settings, export_fn=fake_export, refresh_on_startup=False)) as client:
+        refresh(client)
+        r = client.get("/schema")
+        assert r.status_code == 401 and r.json()["detail"]["reason"] == "missing_auth"
+        assert signed_get(client, "/schema", secret="wrong").status_code == 401
+        assert client.get("/schema", params={"format": "text"}).status_code == 401
+
+
 def test_schema_returns_comments_and_prompt_text(settings):
     with TestClient(create_app(settings, export_fn=fake_export, refresh_on_startup=False)) as client:
-        assert client.get("/schema").status_code == 503
+        assert signed_get(client, "/schema").status_code == 503
         refresh(client)
-        body = client.get("/schema").json()
+        body = signed_get(client, "/schema").json()
         course = next(t for t in body["tables"] if t["name"] == "course")
         assert "course_id" in course["comment"]
         assert all(c["comment"] for c in course["columns"])
         assert "CREATE TABLE participant (" in body["prompt"]
-        text = client.get("/schema", params={"format": "text"})
+        text = signed_get(client, "/schema", params={"format": "text"})
         assert text.headers["content-type"].startswith("text/plain")
         assert text.text == body["prompt"]
 
