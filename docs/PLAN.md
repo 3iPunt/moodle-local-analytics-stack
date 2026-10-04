@@ -1,0 +1,54 @@
+# Plan: Moodle local analytics stack
+
+Demo for the talk "Your data, your infrastructure: local AI and open-source analytics for Moodle".
+
+## Promises to prove
+
+1. Export Moodle data to DuckDB (optionally Parquet).
+2. A local Ollama model writes SQL from natural-language questions.
+3. Free exploration over curated, pseudonymised views.
+4. Nothing leaves the infrastructure at runtime.
+
+## Pinned versions (verified 2026-10-04)
+
+| Component | Version | Reason |
+|---|---|---|
+| Moodle | `v5.3.0` (env `MOODLE_VERSION`) | Latest stable 5.x tag. Plugin requires Moodle 5.1+. |
+| PHP image | `moodlehq/moodle-php-apache:8.3-bookworm` | Moodle 5.2/5.3 require PHP 8.3; 5.1 accepts 8.2-8.4. arm64 + amd64. |
+| MySQL | `mysql:8.4.11` | Moodle 5.x requires MySQL 8.4 minimum. |
+| Ollama | `ollama/ollama:0.35.1` | arm64 + amd64. |
+| Python | `python:3.12.15-slim` | |
+| DuckDB | `1.5.6` | `mysql_scanner` extension published for linux_arm64 and linux_amd64. |
+| sqlglot | `30.21.0` | SQL guard parser. |
+| FastAPI | `0.142.2` | |
+
+## Risks
+
+1. Docker Desktop on the dev machine has 8 GB RAM. `qwen2.5-coder:14b` needs about 9 GB. Default stays 14b in `.env.example`; the demo on this machine runs `qwen2.5-coder:7b`.
+2. No NVIDIA GPU available. The `gpu` compose profile is written but not verified.
+3. Docker Compose v2.17 on the dev machine. Avoid `include` and recent syntax.
+4. DuckDB `mysql_scanner` must be installed at image build time (runtime has no internet). Fallback: `pymysql` + Parquet (`EXPORT_FORMAT=parquet`).
+5. Moodle generator `maketestsite` is slow. Use `maketestcourse` several times plus a custom variety script.
+
+## Phases
+
+Each phase ends with a verification run and a commit.
+
+- (a) db + moodle + cron up and installed non-interactively.
+- (b) demo data.
+- (c) analytics export, DuckDB views, COMMENTs.
+- (d) ollama + model-init + `/ask` end to end with the six demo questions.
+- (e) `local_askdata` plugin installed and working in the UI.
+- (f) network isolation and SQL guard tests.
+- (g) README.
+
+## Layout
+
+```
+compose.yaml  .env.example  Makefile  README.md
+docker/moodle/Dockerfile
+analytics/   (app, export, guard, views.sql, examples.yaml, tests/)
+plugin/local_askdata/
+scripts/     (env generation, demo data, smoke test)
+docs/
+```
