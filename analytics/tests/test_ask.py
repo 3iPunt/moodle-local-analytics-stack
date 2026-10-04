@@ -19,7 +19,7 @@ from app.ask import (
 )
 from app.config import Settings
 from app.main import create_app
-from tests.test_api import ENV, fake_export
+from tests.test_api import ENV, fake_export, refresh
 
 SECRET = "test-secret-3f9a"
 USER_REF = "ab12cd34ef56"
@@ -49,7 +49,8 @@ def settings(tmp_path):
 def make_client(settings, model):
     app = create_app(settings, export_fn=fake_export, refresh_on_startup=False, chat_client=model)
     client = TestClient(app)
-    client.post("/refresh")
+    r = refresh(client, secret=settings.askdata_secret)
+    assert r.status_code == (200 if settings.askdata_secret else 503)
     return client
 
 
@@ -144,7 +145,7 @@ def test_replay_window_is_configurable(tmp_path):
 
 
 def test_no_secret_refuses_every_request(tmp_path):
-    settings = Settings.from_env({**ENV, "DATA_DIR": str(tmp_path)})
+    settings = Settings.from_env({**ENV, "DATA_DIR": str(tmp_path), "ASKDATA_SHARED_SECRET": ""})
     model = FakeModel(GOOD_SQL)
     with make_client(settings, model) as client:
         r = ask(client, BODY, secret="")

@@ -76,6 +76,18 @@ Errors use `{"detail": {"reason": "...", "message": "..."}}`. The message is mea
 
 Each request logs one line at INFO with `user_ref`, the number of courses, attempts, elapsed time and outcome. The question text is logged only at DEBUG.
 
+## Other endpoints
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /health` | none | 200 with the last export time and row counts, 503 until the first export exists. Used by the container healthcheck. |
+| `GET /schema` | none | The model-facing schema with comments (`?format=text` for the prompt text). It holds no row data. |
+| `POST /refresh` | same headers as `/ask` | Runs an export now. Sign the raw body exactly as for `/ask`; the body is usually empty, so the signed message is `timestamp + "\n"`. 409 when an export is already running. |
+
+`/health` and `/schema` stay unauthenticated: they are only reachable on `backend` and expose no data. `make export` does not use HTTP: it runs the exporter inside the container.
+
+The service exports on every start, not only when the file is missing, and retries every 5 s, doubling up to 60 s, until the first export succeeds (on a fresh stack Moodle may still be installing). A run that takes longer than `EXPORT_TIMEOUT_S` (default 600 s) is cancelled and logged as failed; the previous file keeps being served.
+
 ## Ollama in compose
 
 - `ollama` (profile `cpu`, the default) or `ollama-gpu` (profile `gpu`, NVIDIA, `make up OLLAMA_PROFILE=gpu`). Both are only on `backend`, which has no internet access, and both answer as `ollama`. The GPU profile has not been tested: the development machine has no NVIDIA GPU.

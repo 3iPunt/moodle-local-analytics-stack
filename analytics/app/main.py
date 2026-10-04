@@ -37,6 +37,9 @@ ask_log = logging.getLogger("analytics.ask")
 
 ExportFn = Callable[[Settings], ExportResult]
 
+STARTUP_RETRY_INITIAL_S = 5.0
+STARTUP_RETRY_MAX_S = 60.0
+
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
@@ -67,6 +70,8 @@ class ExportRunner:
         self._lock = threading.Lock()
         self._idle = threading.Event()
         self._idle.set()
+        # Set after the first successful export of this process.
+        self.ready = threading.Event()
 
     @property
     def busy(self) -> bool:
@@ -77,23 +82,50 @@ class ExportRunner:
             raise ExportBusy("an export is already running")
         self._idle.clear()
         try:
-            return self._export_fn(self._settings)
+            result = self._export_fn(self._settings)
+            self.ready.set()
+            return result
         finally:
             self._lock.release()
             self._idle.set()
 
-    def run_logged(self) -> None:
+    def run_logged(self) -> bool:
         try:
             self.run()
+            return True
         except ExportBusy:
-            log.info("scheduled export skipped: another export is running")
+            log.info("export skipped: another export is running")
         except ExportError as err:
             log.error("export failed: %s", err)
         except Exception as err:  # noqa: BLE001
             log.error("export failed: %s", type(err).__name__)
+        return False
 
-    def start_background(self) -> None:
-        threading.Thread(target=self.run_logged, name="initial-export", daemon=True).start()
+    def run_until_success(
+        self,
+        stop: threading.Event,
+        initial_s: float = STARTUP_RETRY_INITIAL_S,
+        maximum_s: float = STARTUP_RETRY_MAX_S,
+        wait: Callable[[float], bool] | None = None,
+    ) -> int:
+        """Export until one run succeeds, backing off from ``initial_s`` to ``maximum_s``.
+
+        ``wait`` returns True when ``stop`` was set while waiting. Returns the number of attempts.
+        """
+        wait = wait or stop.wait
+        delay, attempts = initial_s, 0
+        while not stop.is_set():
+            attempts += 1
+            if self.run_logged():
+                return attempts
+            log.info("startup export attempt %d failed, retrying in %gs", attempts, delay)
+            if wait(delay):
+                break
+            delay = min(delay * 2, maximum_s)
+        return attempts
+
+    def start_background(self, stop: threading.Event) -> None:
+        threading.Thread(target=self.run_until_success, args=(stop,), name="startup-export", daemon=True).start()
 
     def wait_idle(self, timeout: float | None = None) -> bool:
         return self._idle.wait(timeout)
@@ -125,10 +157,14 @@ def create_app(
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
-        if refresh_on_startup and not settings.db_path.exists():
-            runner.start_background()
+        # Always export on startup: an existing file may be hours old. Moodle may still
+        # be installing on a fresh stack, so retry until the first success.
+        stop = threading.Event()
+        if refresh_on_startup:
+            runner.start_background(stop)
         task = asyncio.create_task(_periodic(runner, settings.refresh_minutes)) if settings.refresh_minutes > 0 else None
         yield
+        stop.set()
         if task:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -187,9 +223,21 @@ def create_app(
         return {"tables": tables, "prompt": prompt}
 
     @app.post("/refresh")
-    def refresh():
+    async def refresh(request: Request):
+        # Same signature scheme as /ask, over the raw body (usually empty).
         try:
-            result = runner.run()
+            verify_request(
+                settings.askdata_secret,
+                request.headers.get(TIMESTAMP_HEADER),
+                request.headers.get(SIGNATURE_HEADER),
+                await request.body(),
+                settings.replay_window_s,
+            )
+        except AskError as err:
+            log.info("refresh rejected outcome=%s", err.reason)
+            return ask_error(err)
+        try:
+            result = await run_in_threadpool(runner.run)
         except ExportBusy as err:
             return JSONResponse(status_code=409, content={"detail": str(err)})
         except ExportError as err:

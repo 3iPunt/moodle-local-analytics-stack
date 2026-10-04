@@ -47,6 +47,7 @@ class Settings:
     ollama_timeout_s: int = 180
     examples_top_k: int = 6
     query_timeout_s: int = 30
+    export_timeout_s: int = 600
 
     @property
     def db_path(self) -> Path:
@@ -86,5 +87,6 @@ class Settings:
             ollama_timeout_s=_int(env, "OLLAMA_TIMEOUT_S", 180, 1),
             examples_top_k=_int(env, "EXAMPLES_TOP_K", 6, 0),
             query_timeout_s=_int(env, "QUERY_TIMEOUT_S", 30, 1),
+            export_timeout_s=_int(env, "EXPORT_TIMEOUT_S", 600, 1),
             **values,
         )

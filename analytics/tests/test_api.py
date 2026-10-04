@@ -1,14 +1,29 @@
 import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.ask import sign
 from app.config import Settings
-from app.export import ExportResult, build_database
-from app.main import create_app
+from app.export import ExportError, ExportResult, build_database
+from app.main import ExportRunner, create_app
 from tests.fake_moodle import NOW, attach_fake_moodle
 
-ENV = {"ANALYTICS_DB_USER": "ro", "ANALYTICS_DB_PASSWORD": "pw", "ANALYTICS_SALT": "s", "REFRESH_MINUTES": "0"}
+API_SECRET = "api-secret-71c2"
+ENV = {
+    "ANALYTICS_DB_USER": "ro",
+    "ANALYTICS_DB_PASSWORD": "pw",
+    "ANALYTICS_SALT": "s",
+    "REFRESH_MINUTES": "0",
+    "ASKDATA_SHARED_SECRET": API_SECRET,
+}
+
+
+def refresh(client, secret=API_SECRET, body=b""):
+    ts = str(int(time.time()))
+    headers = {"X-Askdata-Timestamp": ts, "X-Askdata-Signature": sign(secret, ts, body)}
+    return client.post("/refresh", content=body, headers=headers)
 
 
 def fake_export(settings):
@@ -27,7 +42,7 @@ def test_health_is_503_without_export_then_ok(settings):
         assert r.status_code == 503
         assert r.json()["db_file"] is False
 
-        r = client.post("/refresh")
+        r = refresh(client)
         assert r.status_code == 200
         assert r.json()["row_counts"]["course"] == 2
 
@@ -42,14 +57,66 @@ def test_health_is_503_without_export_then_ok(settings):
 
 def test_startup_refresh_when_file_missing(settings):
     with TestClient(create_app(settings, export_fn=fake_export)) as client:
-        client.app.state.runner.wait_idle(timeout=10)
+        assert client.app.state.runner.ready.wait(10)
         assert client.get("/health").status_code == 200
+
+
+def test_startup_export_runs_even_when_file_exists(settings):
+    fake_export(settings)
+    calls = []
+
+    def counting(s):
+        calls.append(1)
+        return fake_export(s)
+
+    with TestClient(create_app(settings, export_fn=counting)) as client:
+        assert client.app.state.runner.ready.wait(10)
+    assert calls == [1]
+
+
+def test_refresh_requires_a_signature(settings):
+    with TestClient(create_app(settings, export_fn=fake_export, refresh_on_startup=False)) as client:
+        assert client.post("/refresh").status_code == 401
+        assert refresh(client, secret="wrong").status_code == 401
+        assert client.get("/health").status_code == 503
+        assert refresh(client).status_code == 200
+        assert refresh(client, body=b"{}").status_code == 200
+
+
+def test_startup_retry_backs_off_until_first_success(settings):
+    outcomes = [ExportError("db down")] * 7 + [None]
+    waits = []
+
+    def flaky(s):
+        outcome = outcomes.pop(0)
+        if outcome:
+            raise outcome
+        return fake_export(s)
+
+    def fake_wait(seconds):
+        waits.append(seconds)
+        return False
+
+    runner = ExportRunner(settings, flaky)
+    assert runner.run_until_success(threading.Event(), wait=fake_wait) == 8
+    assert waits == [5, 10, 20, 40, 60, 60, 60]
+    assert runner.ready.is_set()
+
+
+def test_startup_retry_stops_on_shutdown(settings):
+    def broken(s):
+        raise ExportError("db down")
+
+    stop = threading.Event()
+    runner = ExportRunner(settings, broken)
+    assert runner.run_until_success(stop, wait=lambda seconds: True) == 1
+    assert not runner.ready.is_set()
 
 
 def test_schema_returns_comments_and_prompt_text(settings):
     with TestClient(create_app(settings, export_fn=fake_export, refresh_on_startup=False)) as client:
         assert client.get("/schema").status_code == 503
-        client.post("/refresh")
+        refresh(client)
         body = client.get("/schema").json()
         course = next(t for t in body["tables"] if t["name"] == "course")
         assert "course_id" in course["comment"]
@@ -70,10 +137,10 @@ def test_concurrent_refresh_returns_409(settings):
 
     with TestClient(create_app(settings, export_fn=slow_export, refresh_on_startup=False)) as client:
         first = {}
-        t = threading.Thread(target=lambda: first.update(r=client.post("/refresh")))
+        t = threading.Thread(target=lambda: first.update(r=refresh(client)))
         t.start()
         assert started.wait(10)
-        second = client.post("/refresh")
+        second = refresh(client)
         release.set()
         t.join(10)
         assert second.status_code == 409
@@ -85,7 +152,7 @@ def test_refresh_failure_is_500_without_details(settings):
         raise RuntimeError("password=pw leaked")
 
     with TestClient(create_app(settings, export_fn=broken, refresh_on_startup=False)) as client:
-        r = client.post("/refresh")
+        r = refresh(client)
         assert r.status_code == 500
         assert "pw" not in r.text
 

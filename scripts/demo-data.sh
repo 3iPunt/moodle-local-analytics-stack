@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Generates the demo dataset: five tool_generator courses, then scripts/moodle/variety.php.
+# Generates the demo dataset: five tool_generator courses, then scripts/moodle/variety.php,
+# then refreshes the analytics export.
 # Safe to re-run: existing courses are skipped and variety.php exits once applied.
 set -euo pipefail
 
@@ -59,4 +60,9 @@ echo "Running cron once and purging caches"
 as_www php admin/cli/cron.php --keep-alive=0 >/dev/null
 as_www php admin/cli/purge_caches.php
 
-echo "Timings: generator ${gen_time}s, variety ${variety_time}s, total $((SECONDS - total_start))s"
+echo "Exporting to DuckDB so the analytics service serves the new data"
+export_start=$SECONDS
+docker compose exec -T analytics python -m app.export
+export_time=$((SECONDS - export_start))
+
+echo "Timings: generator ${gen_time}s, variety ${variety_time}s, export ${export_time}s, total $((SECONDS - total_start))s"
