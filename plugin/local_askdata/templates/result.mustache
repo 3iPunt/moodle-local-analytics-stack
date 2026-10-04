@@ -1,0 +1,89 @@
+{{!
+    This file is part of Moodle - https://moodle.org/
+
+    Moodle is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Moodle is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
+}}
+{{!
+    @template local_askdata/result
+
+    One question and its answer.
+
+    Context variables required for this template:
+    * question - The question asked.
+    * error - Error message, if the question failed.
+    * sql - Generated SQL.
+    * columns - List of column names.
+    * rows - List of rows, each with a "cells" list.
+    * hasrows - Whether there is at least one row.
+    * rowcount - Number of rows shown.
+    * elapsed_ms - Elapsed time in milliseconds.
+    * truncated - Whether the rows were cut at the maximum.
+
+    Example context (json):
+    {
+        "question": "Which courses do I teach?",
+        "error": "",
+        "sql": "SELECT course_shortname, students FROM v_courses",
+        "columns": ["course_shortname", "students"],
+        "rows": [{"cells": ["DA101", "95"]}, {"cells": ["PROG101", "85"]}],
+        "hasrows": true,
+        "rowcount": 2,
+        "elapsed_ms": 1234,
+        "truncated": false
+    }
+}}
+<div class="card mb-3" data-region="answer">
+    <div class="card-header d-flex justify-content-between align-items-start gap-2">
+        <span class="fw-bold">{{question}}</span>
+        {{^error}}
+        <span class="badge bg-secondary text-nowrap">{{#str}}elapsed, local_askdata, {{elapsed_ms}}{{/str}}</span>
+        {{/error}}
+    </div>
+    <div class="card-body">
+        {{#error}}
+        <div class="alert alert-danger mb-0" role="alert">{{error}}</div>
+        {{/error}}
+        {{^error}}
+            {{#hasrows}}
+            <div class="table-responsive local-askdata-results">
+                <table class="table table-sm table-striped table-hover mb-2">
+                    <thead class="sticky-top bg-body">
+                        <tr>
+                            {{#columns}}<th scope="col">{{.}}</th>{{/columns}}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{#rows}}
+                        <tr>{{#cells}}<td>{{.}}</td>{{/cells}}</tr>
+                        {{/rows}}
+                    </tbody>
+                </table>
+            </div>
+            <p class="small text-muted mb-2">
+                {{#str}}rowcount, local_askdata, {{rowcount}}{{/str}}
+                {{#truncated}} {{#str}}truncated, local_askdata, {{rowcount}}{{/str}}{{/truncated}}
+            </p>
+            {{/hasrows}}
+            {{^hasrows}}
+            <div class="alert alert-info" role="status">{{#str}}noresults, local_askdata{{/str}}</div>
+            {{/hasrows}}
+            {{#sql}}
+            <details>
+                <summary class="small">{{#str}}sql, local_askdata{{/str}}</summary>
+                <pre class="bg-light border rounded p-2 mt-2 mb-0 small"><code>{{sql}}</code></pre>
+            </details>
+            {{/sql}}
+        {{/error}}
+    </div>
+</div>

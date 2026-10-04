@@ -1,0 +1,74 @@
+{{!
+    This file is part of Moodle - https://moodle.org/
+
+    Moodle is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Moodle is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
+}}
+{{!
+    @template local_askdata/chat
+
+    "Ask your data" chat page.
+
+    Context variables required for this template:
+    * courseid - Current course id.
+    * coursefullname - Formatted course full name.
+    * examples - List of example questions, each with a "text" key.
+    * hasexamples - Whether there are example questions.
+    * maxlength - Maximum question length.
+
+    Example context (json):
+    {
+        "courseid": 2,
+        "coursefullname": "Data Analysis 101",
+        "examples": [
+            {"text": "Which students have not logged in for 14 days?"},
+            {"text": "Which activity has the highest drop-off?"}
+        ],
+        "hasexamples": true,
+        "maxlength": 2000
+    }
+}}
+<div class="local-askdata" data-region="local-askdata" data-courseid="{{courseid}}">
+    <p class="text-muted">{{#str}}intro, local_askdata{{/str}}</p>
+
+    <form data-region="ask-form" class="mb-3" autocomplete="off">
+        <div class="mb-2">
+            <label for="local-askdata-question-{{uniqid}}" class="form-label fw-bold">{{#str}}question, local_askdata{{/str}}</label>
+            <textarea id="local-askdata-question-{{uniqid}}" name="question" class="form-control" rows="3"
+                maxlength="{{maxlength}}" data-region="question" required
+                placeholder="{{#str}}questionplaceholder, local_askdata{{/str}}"></textarea>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+            <button type="submit" class="btn btn-primary" data-action="send">
+                <span data-region="send-label">{{#str}}send, local_askdata{{/str}}</span>
+                <span class="spinner-border spinner-border-sm ms-1 d-none" role="status" aria-hidden="true" data-region="spinner"></span>
+            </button>
+            <span class="text-muted small d-none" data-region="sending" aria-live="polite">{{#str}}sending, local_askdata{{/str}}</span>
+        </div>
+        <div class="alert alert-danger mt-2 d-none" role="alert" data-region="form-error"></div>
+    </form>
+
+    {{#hasexamples}}
+    <div class="mb-4">
+        <p class="small text-muted mb-1">{{#str}}examples, local_askdata{{/str}}</p>
+        <div class="d-flex flex-wrap gap-2">
+            {{#examples}}
+            <button type="button" class="btn btn-sm btn-outline-secondary rounded-pill" data-action="example" data-question="{{text}}">{{text}}</button>
+            {{/examples}}
+        </div>
+    </div>
+    {{/hasexamples}}
+
+    <h3 class="h5 d-none" data-region="history-heading">{{#str}}history, local_askdata{{/str}}</h3>
+    <div data-region="answers" aria-live="polite"></div>
+</div>
