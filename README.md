@@ -311,6 +311,7 @@ docs/                 plan, demo data, API, plugin, security, benchmark
 | [docs/ask-api.md](docs/ask-api.md) | `/ask`, `/health`, `/schema`, `/refresh`, errors, prompt building |
 | [docs/plugin.md](docs/plugin.md) | `local_askdata` in the stack: install, configuration, tests |
 | [docs/security.md](docs/security.md) | Security model and its limits |
+| [docs/REPORT.md](docs/REPORT.md) | Final status report |
 | [docs/benchmark.md](docs/benchmark.md) | Measured answer times and generated SQL |
 | [plugin/local_askdata/README.md](plugin/local_askdata/README.md) | Plugin settings, curl security, security model |
 
