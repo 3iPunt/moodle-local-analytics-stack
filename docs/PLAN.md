@@ -25,7 +25,7 @@ Demo for the talk "Your data, your infrastructure: local AI and open-source anal
 
 ## Risks
 
-1. Docker Desktop on the dev machine has 8 GB RAM. `qwen2.5-coder:14b` needs about 9 GB. Default stays 14b in `.env.example`; the demo on this machine runs `qwen2.5-coder:7b`.
+1. Docker Desktop on the dev machine has 8 GB RAM (7.67 GB VM). `qwen2.5-coder:14b` needs about 9 GB. Default stays 14b in `.env.example`. Outcome: only `qwen2.5-coder:1.5b` was measured, and only with db, moodle and cron stopped; 7b and 14b were not run (see `docs/benchmark.md`).
 2. No NVIDIA GPU available. The `gpu` compose profile is written but not verified.
 3. Docker Compose v2.17 on the dev machine. Avoid `include` and recent syntax.
 4. DuckDB `mysql_scanner` must be installed at image build time (runtime has no internet). Fallback: `pymysql` + Parquet (`EXPORT_FORMAT=parquet`).
@@ -67,7 +67,7 @@ Each phase ends with a verification run and a commit.
 - (d) ollama + model-init + `/ask` end to end with the six demo questions.
 - (e) `local_askdata` plugin installed and working in the UI. Done, see `docs/plugin.md`.
 - (f) network isolation and SQL guard tests.
-- (g) README.
+- (g) README. Done, see `README.md`.
 
 ## Layout
 
