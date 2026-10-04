@@ -161,8 +161,9 @@ Full details and the reasoning are in [docs/security.md](docs/security.md).
 - The model is downloaded by `model-init`, the only container on `egress`, which is never attached to `backend`.
 - Scoping happens twice. Moodle sends only the courses where the user holds `local/askdata:ask`, minus suspended or expired enrolments and hidden courses the user cannot see. The analytics service then copies only those courses into a private in-memory DuckDB, so other courses do not exist on the connection the model's SQL runs on.
 - The SQL guard (sqlglot) accepts one read-only statement over the allowed views, rejects qualified names, system schemas and file, network or introspection functions, and adds a row cap.
-- The DuckDB connection has external access disabled, a locked configuration, a 512 MB memory limit, no spilling to disk and a 30 s query timeout.
-- Every request from Moodle is signed with HMAC-SHA256 over the timestamp and raw body. Requests outside a 300 s window are rejected. The secret never reaches the browser.
+- The DuckDB connection has external access disabled, a locked configuration, a 512 MB memory limit, no spilling to disk and a 30 s query timeout. At most `ASK_CONCURRENCY` (default 2) questions run at once, so DuckDB memory stays under `ASK_CONCURRENCY x DUCKDB_MEMORY_LIMIT`; extra questions get 503 `busy`.
+- Every request from Moodle is signed with HMAC-SHA256 over the timestamp and raw body. Requests outside a 300 s window are rejected. `/schema` and the detailed `/health` need the same signature; only the bare `/health` liveness answer is open. The secret never reaches the browser.
+- A user's scope is every course where they hold `local/askdata:ask`. A manager with a system role gets the whole site.
 - The exporter connects as `analytics_ro`, with column-level `SELECT` on the exported columns only. The one-shot `db-grants` service revokes and re-applies these grants on every `make up`.
 - `user_ref` is `sha256(userid || ANALYTICS_SALT)`. This is pseudonymisation, not anonymisation: anyone with the salt can recompute every `user_ref`.
 - Moodle stores the full question text in its log (`\local_askdata\event\question_asked`). The analytics service logs it only at DEBUG.
@@ -239,7 +240,7 @@ The demo dates are relative to the moment `make demo-data` ran, but live answers
 | Target | What it does |
 |---|---|
 | `make help` | List the targets |
-| `make env` | Create `.env` with random secrets if missing; refuse `changeme` placeholders |
+| `make env` | Create `.env` with random secrets if missing; refuse placeholder values |
 | `make build` | Build the images |
 | `make up` | Start the stack, install Moodle on the first run (`OLLAMA_PROFILE=gpu` for NVIDIA) |
 | `make down` | Stop the stack, keep the volumes |
@@ -277,7 +278,8 @@ Known limits:
 - The question text is stored in Moodle's standard log.
 - The proxy has egress by design. It only forwards to Moodle, but a compromised proxy would have a route out.
 - A signed request can be replayed within the 300 s window. There is no nonce store.
-- `/schema` and `/health` are unauthenticated. They are only reachable on `backend` and hold no row data.
+- The bare `/health` (`{"status": "ok"}`) is unauthenticated, for the container healthcheck.
+- Moodle logs the proxy's IP address, not the browser's.
 - A Moodle administrator can reopen curl security in the admin UI and let Moodle reach other hosts.
 
 Deliberate changes from the original brief:

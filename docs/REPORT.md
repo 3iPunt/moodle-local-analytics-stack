@@ -11,8 +11,8 @@ Development machine: Apple M1 Pro, 32 GB host RAM, Docker Desktop VM limited to 
 - The export to DuckDB takes 0.3 to 0.6 s; to Parquet about 0.6 s. Both formats give the same tables (tested).
 - `/ask` answers the six demo questions with `qwen2.5-coder:1.5b`, all correct on the first attempt. Paraphrases: 5 of 6 correct.
 - The "Ask your data" page in Moodle sends signed, course-scoped requests and shows SQL, table and time. When the model cannot load it shows a dedicated message.
-- Tests: analytics 243 passed, 2 skipped. Plugin PHPUnit 28 tests, 91 assertions, about 35 s (1 min 53 s on the first run, which initialises the test site).
-- `make smoke`: 52 PASS, 0 FAIL, 3 SKIP. The three skips all come from the model not loading for lack of memory while the full stack runs.
+- Tests: analytics 266 passed, 2 skipped. Plugin PHPUnit 32 tests, 98 assertions, about 55 s (1 min 53 s on the first run, which initialises the test site).
+- `make smoke`: 57 PASS, 0 FAIL, 3 SKIP, plus 20 passed in the host-side isolation test. The three skips all come from the model not loading for lack of memory while the full stack runs.
 
 ## What could not be verified
 
@@ -68,6 +68,8 @@ These six questions are also few-shot examples, so the model can copy their SQL.
 - A second scoping layer: course-filtered tables copied into a locked in-memory DuckDB per request.
 - `make clean` removes the Ollama model volume; `make demo-reset` keeps it.
 - `BACKEND_SUBNET` is configurable, and `scripts/moodle/configure-askdata.sh` opens Moodle's curl security for exactly that /24.
+- `/schema` and the detailed `/health` need the HMAC signature. Only the bare `/health` liveness answer is open.
+- At most `ASK_CONCURRENCY` (default 2) questions run at once; the rest get 503 `busy`. `OLLAMA_TIMEOUT_S` (150 s) is a budget for both model calls of a question, below the plugin timeout (180 s).
 
 ## Commits by phase
 
@@ -117,3 +119,10 @@ Hardening between (d) and (e)
 
 (g) README
 - `831ae5d` docs: write README with architecture, quick start and verification status
+
+Final fixes, after the last review
+- `09f357f` fix(analytics): require the signature on schema and detailed health
+- `71960ac` feat(analytics): bound concurrent asks and reject oversized or malformed requests
+- `0da14e0` fix(plugin): release the session during asks and report a busy service
+- `0fa24eb` fix: harden grants, smoke checks, make targets and upgrade on start
+- docs: document scope policy, replay window and final fixes (this report update)

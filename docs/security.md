@@ -18,6 +18,8 @@ Docker publishes ports only on non-internal networks, so a Moodle with a publish
 ## Two-layer scoping
 
 1. **Moodle** computes the course ids from the user's capability `local/askdata:ask` (editing teachers and managers by default), minus suspended or expired enrolments and hidden courses the user cannot see. Students are refused on the page and on the AJAX call.
+
+   The scope is every course where the user holds the capability, not only the course page the question was asked from. A teacher of three courses can ask about all three from any of them. A manager assigned at system level holds the capability in every course, so the manager's questions run over the whole site. Restrict the capability (or the manager role) if that is too broad.
 2. **Analytics** treats `course_ids` as the only scope. Before the model is called it copies only the rows of those courses into a private in-memory DuckDB connection and detaches the export. Rows of other courses do not exist on that connection.
 
 ## SQL guard
@@ -37,7 +39,9 @@ On the request connection: `memory_limit` (default 512MB), `threads` (default 2)
 
 ## Authentication between Moodle and analytics
 
-Each request carries `X-Askdata-Timestamp` and `X-Askdata-Signature = HMAC-SHA256(secret, timestamp + "\n" + body)`. The service verifies the signature over the raw bytes before parsing JSON, compares in constant time, and rejects timestamps outside `ASKDATA_REPLAY_WINDOW_S` (300 s). An empty secret disables the endpoints (503). `/refresh` uses the same scheme. The secret stays server side: Moodle calls the service from PHP, never from the browser.
+Each request carries `X-Askdata-Timestamp` and `X-Askdata-Signature = HMAC-SHA256(secret, timestamp + "\n" + body)`. The service verifies the signature over the raw bytes before parsing JSON, compares in constant time, and rejects timestamps outside `ASKDATA_REPLAY_WINDOW_S` (300 s). Malformed headers get 401 before any comparison, and bodies over 64 KiB get 413 before they are read. An empty secret disables the endpoints (503). `/refresh`, `/schema` and the detailed `/health` use the same scheme; only the bare `/health` liveness answer (`{"status": "ok"}`) is open, for the container healthcheck. The secret stays server side: Moodle calls the service from PHP, never from the browser.
+
+`ASK_CONCURRENCY` (default 2) caps the questions running at once, which also caps DuckDB memory at `ASK_CONCURRENCY x DUCKDB_MEMORY_LIMIT`. Extra requests get 503 `busy` straight away. The Moodle web service runs with a read-only session, so a teacher waiting for an answer does not block their other Moodle tabs.
 
 ## Database grants
 
@@ -51,6 +55,7 @@ The exporter connects as `analytics_ro`, which has column-level `SELECT` on exac
 
 - analytics: one INFO line per `/ask` with `user_ref`, number of courses, attempts, elapsed time and outcome. The question text is logged only at DEBUG.
 - Moodle: every question that passes the capability check, including failed ones, is logged as `\local_askdata\event\question_asked`. The full question text is stored in `logstore_standard_log`.
+- The IP address Moodle stores in its logs is the proxy's address on `web`, not the browser's. nginx sends `X-Forwarded-For`, but Moodle ignores it: `getremoteaddrconf` is at its default (3, skip `X-Forwarded-For` and `Client-IP`). Change it in Site administration > Server > HTTP if per-user IPs matter, and only behind a proxy you control.
 - Error messages shown to users never contain stack traces, secrets or signatures. 5xx errors map to fixed messages.
 
 ## Secrets
@@ -65,7 +70,8 @@ The exporter connects as `analytics_ro`, which has column-level `SELECT` on exac
 
 - **The proxy has egress.** It sits on `frontend`. It only forwards to Moodle, but a compromise of the proxy would have a route out. Moodle itself has none.
 - **Moodle admins can change cURL security.** The configure script allows only `BACKEND_SUBNET` and port 8000, but an administrator can edit those settings in the UI and open other targets.
-- **`/schema` and `/health` are unauthenticated.** They are reachable only on `backend` and hold no row data (schema text and row counts).
-- **Replay inside the window.** A captured signed request can be replayed for up to 300 s. There is no nonce store.
+- **Bare `/health` is unauthenticated.** It only says whether an export exists. The details and `/schema` need a signature.
+- **Replay inside the window.** A captured signed request can be replayed for up to 300 s (`ASKDATA_REPLAY_WINDOW_S`). There is no nonce store, so the service cannot tell a replay from a repeated question. Traffic stays on the internal `backend` network, so capturing a request already requires access to that network.
+- **Scope follows the capability.** A user with `local/askdata:ask` at system or category level (managers by default) gets every course in that context.
 - **Course ids are trusted.** Whoever holds the shared secret can sign any set of ids.
 - **Denylist guard.** Review it when DuckDB is upgraded. The connection settings are the backstop.

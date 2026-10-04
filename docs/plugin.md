@@ -34,5 +34,6 @@ The image installs Composer dev dependencies at build time (the container has no
 ## Known limits
 
 - The page shows the SQL and the table only. The service does not write an explanation of the answer.
-- The model needs more memory than the 8 GB development machine has free while MySQL and Moodle run. On that machine `/ask` answers 502 `model_unavailable`, and the page shows a dedicated message asking the administrator to check the Ollama service. A 504 shows a timeout message.
+- The model needs more memory than the 8 GB development machine has free while MySQL and Moodle run. On that machine `/ask` answers 502 `model_unavailable`, and the page shows a dedicated message asking the administrator to check the Ollama service. A 504, or a request that reaches the plugin `timeout` (180 s), shows a timeout message. A 503 `busy` (the service is already answering `ASK_CONCURRENCY` questions) shows "answering other questions, try again".
+- The web service runs with a read-only session (`readonlysession` in `db/services.php`), so a long answer does not lock the user's other Moodle requests.
 - The demo students (`tool_generator_*`) have no password. To log in as one, set it with `php admin/cli/reset_password.php --username=tool_generator_000001 --password=... --ignore-password-policy` as `www-data`.
