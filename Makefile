@@ -97,11 +97,13 @@ test-analytics: ## Run the analytics unit and integration tests inside the conta
 # PHPUnit runs as www-data with tables prefixed phpu_ in the Moodle database and dataroot
 # /var/www/phpunitdata (volume). init.php runs only when util.php --diag reports that the
 # test site is missing or outdated; --disable-composer keeps it offline (vendor/ is in the image).
+# phpunit.xml lives in the container layer, so a recreated container only needs --buildconfig.
 PHPUNIT_CLI := public/admin/tool/phpunit/cli
 test-plugin: ## Run the local_askdata PHPUnit tests inside the moodle container
 	@$(COMPOSE) exec -T -w /var/www/html moodle runuser -u www-data -- bash -c '\
 		if php $(PHPUNIT_CLI)/util.php --diag >/dev/null 2>&1; then \
 			echo "PHPUnit test site is initialised"; \
+			[ -f phpunit.xml ] || php $(PHPUNIT_CLI)/util.php --buildconfig || exit $$?; \
 		else \
 			echo "Initialising the PHPUnit test site (first run takes a few minutes)"; \
 			php $(PHPUNIT_CLI)/init.php --disable-composer || exit $$?; \
