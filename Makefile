@@ -7,7 +7,7 @@ COMPOSE_ALL := COMPOSE_PROFILES=cpu,gpu,init docker compose
 
 .DEFAULT_GOAL := help
 
-.PHONY: help env build up down logs clean init-model demo-data demo-reset export sql ask bench test test-analytics smoke
+.PHONY: help env build up down logs clean init-model demo-data demo-reset configure-plugin export sql ask bench test test-analytics smoke
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -60,6 +60,14 @@ demo-reset: env ## DESTROYS Moodle, MySQL and export data, then reinstalls and r
 	[ "$$(docker inspect -f '{{.State.Health.Status}}' moodle-local-stack-analytics-1 2>/dev/null)" = healthy ] \
 		|| { echo "analytics did not become healthy in 10 minutes" >&2; exit 1; }
 	./scripts/demo-data.sh
+
+# Reads KEY from .env (empty when missing).
+env_value = $(shell awk -v k='$(1)' 'index($$0, k "=") == 1 {print substr($$0, length(k) + 2)}' .env 2>/dev/null)
+
+configure-plugin: env ## Set local_askdata settings and open Moodle curl security for the backend subnet
+	@ASKDATA_SHARED_SECRET='$(call env_value,ASKDATA_SHARED_SECRET)' \
+	BACKEND_SUBNET='$(or $(call env_value,BACKEND_SUBNET),172.28.0.0/24)' \
+	$(COMPOSE) exec -T -e ASKDATA_SHARED_SECRET -e BACKEND_SUBNET moodle bash /opt/stack/scripts/configure-askdata.sh
 
 export: ## Export Moodle data to DuckDB now and print row counts
 	$(COMPOSE) exec -T analytics python -m app.export
