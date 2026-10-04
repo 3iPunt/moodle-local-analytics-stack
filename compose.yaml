@@ -80,6 +80,33 @@ services:
     networks:
       - backend
 
+  analytics:
+    image: moodle-local-stack/analytics:dev
+    build:
+      context: ./analytics
+    restart: unless-stopped
+    # Explicit list instead of env_file: the service never sees the MySQL root or Moodle passwords.
+    environment:
+      ANALYTICS_DB_HOST: db
+      ANALYTICS_DB_PORT: "3306"
+      ANALYTICS_DB_NAME: ${MYSQL_DATABASE}
+      ANALYTICS_DB_USER: ${ANALYTICS_DB_USER}
+      ANALYTICS_DB_PASSWORD: ${ANALYTICS_DB_PASSWORD}
+      ANALYTICS_SALT: ${ANALYTICS_SALT}
+      EXPORT_FORMAT: ${EXPORT_FORMAT:-duckdb}
+      REFRESH_MINUTES: ${REFRESH_MINUTES:-15}
+      MAX_ROWS: ${MAX_ROWS:-200}
+    volumes:
+      - analytics_data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    # No published port. Moodle reaches http://analytics:8000 over backend, which is
+    # internal, so Docker would not publish one anyway. Debug with `make sql` or
+    # `docker compose exec analytics python -c "..."`.
+    networks:
+      - backend
+
 networks:
   frontend:
   backend:
@@ -88,3 +115,4 @@ networks:
 volumes:
   db_data:
   moodledata:
+  analytics_data:
