@@ -44,11 +44,8 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE}
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      ANALYTICS_DB_USER: ${ANALYTICS_DB_USER}
-      ANALYTICS_DB_PASSWORD: ${ANALYTICS_DB_PASSWORD}
     volumes:
       - db_data:/var/lib/mysql
-      - ./docker/db/10-analytics-user.sh:/docker-entrypoint-initdb.d/10-analytics-user.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
       interval: 5s
@@ -124,6 +121,27 @@ services:
     networks:
       - backend
 
+  # One-shot: creates analytics_ro and grants SELECT per table once Moodle has created
+  # its tables. Runs on every `up`, so existing volumes get the current grants too.
+  db-grants:
+    image: mysql:8.4.11
+    restart: "no"
+    entrypoint: ["bash", "/opt/stack/analytics-grants.sh"]
+    environment:
+      MYSQL_HOST: db
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      ANALYTICS_DB_USER: ${ANALYTICS_DB_USER}
+      ANALYTICS_DB_PASSWORD: ${ANALYTICS_DB_PASSWORD}
+    volumes:
+      - ./docker/db/analytics-grants.sh:/opt/stack/analytics-grants.sh:ro
+      - ./docker/db/analytics-tables.txt:/opt/stack/analytics-tables.txt:ro
+    depends_on:
+      moodle:
+        condition: service_healthy
+    networks:
+      - backend
+
   analytics:
     image: moodle-local-stack/analytics:dev
     build:
@@ -155,6 +173,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      moodle:
+        condition: service_healthy
+      db-grants:
+        condition: service_completed_successfully
     # No published port. Moodle reaches http://analytics:8000 over backend, which is
     # internal, so Docker would not publish one anyway. Debug with `make sql` or
     # `docker compose exec analytics python -c "..."`.

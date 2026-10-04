@@ -43,6 +43,12 @@ Docker only publishes ports on non-internal networks, so Moodle cannot keep a pu
 
 `BACKEND_SUBNET` is pinned so Moodle's curl security can allow exactly that range. Override it in `.env` when it overlaps a network on the host (on the dev machine `172.28.0.0/16` belongs to another project, so `.env` uses `172.30.0.0/24`).
 
+## Database access
+
+`analytics_ro` has column-level `SELECT` on exactly the columns the exporter reads (`docker/db/analytics-tables.txt`, kept equal to `SOURCE_COLUMNS` in `analytics/app/export.py` by a unit test). `mdl_user.password`, emails, names, IPs and every other table are denied (MySQL errors 1142/1143). Both export paths work with these grants: mysql_scanner only sees the granted columns in `information_schema` and pushes the projection down.
+
+The grants are applied by the one-shot service `db-grants` (`docker/db/analytics-grants.sh`) after Moodle is healthy and before `analytics` starts. It cannot run from `docker-entrypoint-initdb.d`: MySQL rejects a table-level grant on a table that does not exist yet (error 1146), and Moodle creates its tables later. Each run revokes everything and grants again, so stacks created before this change get the narrower grants on the next `make up`; no `make clean` is needed.
+
 ## Phases
 
 Each phase ends with a verification run and a commit.

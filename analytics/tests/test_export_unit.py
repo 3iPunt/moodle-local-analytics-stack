@@ -1,9 +1,11 @@
+from pathlib import Path
+
 import duckdb
 import pytest
 
 from app.config import Settings
 from app.db import READER_CONFIG
-from app.export import ExportBusy, export_lock, publish, render_views_sql, sql_literal, user_ref
+from app.export import SOURCE_COLUMNS, ExportBusy, export_lock, publish, render_views_sql, sql_literal, user_ref
 
 ENV = {
     "ANALYTICS_DB_USER": "ro",
@@ -81,3 +83,13 @@ def test_export_lock_is_exclusive(tmp_path):
                 pass
     with export_lock(tmp_path):
         pass
+
+
+GRANTS_FILE = Path(__file__).resolve().parents[2] / "docker" / "db" / "analytics-tables.txt"
+
+
+@pytest.mark.skipif(not GRANTS_FILE.exists(), reason="repository checkout only (not copied into the image)")
+def test_grant_list_matches_source_columns():
+    lines = [line.split() for line in GRANTS_FILE.read_text().splitlines() if line.strip() and not line.startswith("#")]
+    assert {table: tuple(columns.split(",")) for table, columns in lines} == SOURCE_COLUMNS
+    assert [table for table, _ in lines] == list(SOURCE_COLUMNS)

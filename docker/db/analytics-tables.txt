@@ -1,0 +1,28 @@
+# Columns the analytics_ro user may SELECT, one table per line: <table> <col>,<col>,...
+# Must equal SOURCE_COLUMNS in analytics/app/export.py (checked by analytics/tests/test_export_unit.py).
+# Applied by docker/db/analytics-grants.sh as column-level grants.
+mdl_course id,shortname,fullname,startdate,visible,enablecompletion,format
+mdl_user id,deleted,lastaccess
+mdl_enrol id,courseid,status
+mdl_user_enrolments id,enrolid,userid,status,timestart,timecreated
+mdl_context id,contextlevel,instanceid
+mdl_role id,shortname
+mdl_role_assignments id,roleid,contextid,userid
+mdl_user_lastaccess id,userid,courseid,timeaccess
+mdl_logstore_standard_log id,courseid,userid,timecreated,origin,action,contextlevel,contextinstanceid,anonymous
+mdl_modules id,name
+mdl_course_modules id,course,module,instance,section,visible,completion,deletioninprogress
+mdl_course_sections id,section
+mdl_assign id,course,name,duedate
+mdl_quiz id,name,timeclose
+mdl_page id,name
+mdl_forum id,name
+mdl_url id,name
+mdl_resource id,name
+mdl_book id,name
+mdl_label id,name
+mdl_course_modules_completion id,coursemoduleid,userid,completionstate,timemodified
+mdl_course_completions id,userid,course,timecompleted
+mdl_grade_items id,courseid,itemname,itemtype,itemmodule,iteminstance,grademax,grademin
+mdl_grade_grades id,itemid,userid,finalgrade,rawgrade,timemodified
+mdl_assign_submission id,assignment,userid,status,timemodified,latest
