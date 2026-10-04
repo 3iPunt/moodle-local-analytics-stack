@@ -14,7 +14,8 @@ Demo for the talk "Your data, your infrastructure: local AI and open-source anal
 | Component | Version | Reason |
 |---|---|---|
 | Moodle | `v5.3.0` (env `MOODLE_VERSION`) | Latest stable 5.x tag. Plugin requires Moodle 5.1+. |
-| PHP image | `moodlehq/moodle-php-apache:8.3-bookworm` | Moodle 5.2/5.3 require PHP 8.3; 5.1 accepts 8.2-8.4. arm64 + amd64. |
+| PHP image | `moodlehq/moodle-php-apache:8.3-bookworm@sha256:501f19fa…` | Moodle 5.2/5.3 require PHP 8.3; 5.1 accepts 8.2-8.4. arm64 + amd64. Pinned by index digest (full value in `docker/moodle/Dockerfile`). |
+| Proxy | `nginx:1.30.5-alpine` | Stable branch. Only container with a published port. |
 | MySQL | `mysql:8.4.11` | Moodle 5.x requires MySQL 8.4 minimum. |
 | Ollama | `ollama/ollama:0.35.1` | arm64 + amd64. |
 | Python | `python:3.12.15-slim` | |

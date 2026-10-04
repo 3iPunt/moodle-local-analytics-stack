@@ -1,6 +1,8 @@
 FROM composer:2.10.3 AS composer
 
-FROM moodlehq/moodle-php-apache:8.3-bookworm
+# moodlehq/moodle-php-apache:8.3-bookworm, multi-arch index digest recorded 2026-10-04.
+# Refresh: docker buildx imagetools inspect moodlehq/moodle-php-apache:8.3-bookworm
+FROM moodlehq/moodle-php-apache:8.3-bookworm@sha256:501f19fa75ad3cdc8962f2a742f39d179b8aa8ffdc2ff233d8d27a32f14e0e05
 
 ARG MOODLE_VERSION=v5.3.0
 

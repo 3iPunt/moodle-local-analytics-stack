@@ -12,8 +12,14 @@ COMPOSE_ALL := COMPOSE_PROFILES=cpu,gpu,init docker compose
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-env: ## Create .env with random secrets if it does not exist
+env: ## Create .env with random secrets if it does not exist, refuse placeholder values
 	@if [ ! -f .env ]; then ./scripts/gen-env.sh; else echo ".env already present"; fi
+	@if awk '/^[A-Z_]+=.*changeme/ {found = 1} END {exit !found}' .env; then \
+		echo "Refusing to continue: .env still contains 'changeme' placeholders:" >&2; \
+		awk -F= '/^[A-Z_]+=.*changeme/ {print "  " $$1}' .env >&2; \
+		echo "Run ./scripts/gen-env.sh --force or set real values." >&2; \
+		exit 1; \
+	fi
 
 build: env ## Build the images
 	$(COMPOSE) build
