@@ -24,7 +24,6 @@ use core_external\external_value;
 use local_askdata\event\question_asked;
 use local_askdata\local\client;
 use local_askdata\local\course_scope;
-use local_askdata\local\service_exception;
 
 /**
  * External function local_askdata_ask.
@@ -74,50 +73,42 @@ class ask extends external_api {
         self::validate_context($context);
         require_capability('local/askdata:ask', $context);
 
-        $question = trim($question);
-        if ($question === '') {
-            throw new \invalid_parameter_exception('The question must not be empty.');
-        }
-        if (\core_text::strlen($question) > self::MAX_QUESTION_LENGTH) {
-            throw new \invalid_parameter_exception('The question must not exceed ' . self::MAX_QUESTION_LENGTH . ' characters.');
-        }
-
-        $courseids = course_scope::for_user((int) $USER->id);
-        if (!in_array($courseid, $courseids, true)) {
-            // The capability was checked above. This covers site administrators without a course role.
-            $courseids[] = $courseid;
-            sort($courseids);
-        }
-
         $start = microtime(true);
-        $ok = false;
+        $courseids = [$courseid];
         $result = null;
-        $error = null;
+        // Every question that passed the capability check is audited, whatever goes wrong afterwards.
         try {
+            $question = trim($question);
+            if ($question === '') {
+                throw new \invalid_parameter_exception('The question must not be empty.');
+            }
+            if (\core_text::strlen($question) > self::MAX_QUESTION_LENGTH) {
+                throw new \invalid_parameter_exception('The question must not exceed ' . self::MAX_QUESTION_LENGTH . ' characters.');
+            }
+
+            $courseids = course_scope::for_user((int) $USER->id);
+            if (!in_array($courseid, $courseids, true)) {
+                // The capability was checked above. This covers site administrators without a course role.
+                $courseids[] = $courseid;
+                sort($courseids);
+            }
+
             $client = self::$clientoverride ?? client::from_config();
             $result = $client->ask($question, $courseids, (int) $USER->id);
-            $ok = true;
-        } catch (service_exception $e) {
-            $error = $e;
+            return $result;
+        } finally {
+            $elapsed = $result['elapsed_ms'] ?? (int) round((microtime(true) - $start) * 1000);
+            question_asked::create([
+                'context' => $context,
+                'courseid' => $courseid,
+                'other' => [
+                    'question' => \core_text::substr($question, 0, self::MAX_QUESTION_LENGTH),
+                    'courseids' => $courseids,
+                    'elapsed_ms' => (int) $elapsed,
+                    'ok' => $result !== null,
+                ],
+            ])->trigger();
         }
-        $elapsed = $result['elapsed_ms'] ?? (int) round((microtime(true) - $start) * 1000);
-
-        $event = question_asked::create([
-            'context' => $context,
-            'courseid' => $courseid,
-            'other' => [
-                'question' => $question,
-                'courseids' => $courseids,
-                'elapsed_ms' => (int) $elapsed,
-                'ok' => $ok,
-            ],
-        ]);
-        $event->trigger();
-
-        if ($error !== null) {
-            throw $error;
-        }
-        return $result;
     }
 
     /**

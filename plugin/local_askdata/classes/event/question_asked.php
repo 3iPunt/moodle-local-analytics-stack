@@ -82,12 +82,21 @@ class question_asked extends \core\event\base {
             throw new \coding_exception('The context must be a course context.');
         }
         foreach (['question', 'courseids', 'elapsed_ms', 'ok'] as $key) {
-            if (!isset($this->other[$key])) {
+            if (!isset($this->other) || !array_key_exists($key, $this->other)) {
                 throw new \coding_exception("The '{$key}' value must be set in other.");
             }
         }
+        if (!is_string($this->other['question'])) {
+            throw new \coding_exception("The 'question' value must be a string.");
+        }
         if (!is_array($this->other['courseids'])) {
             throw new \coding_exception("The 'courseids' value must be an array.");
+        }
+        if (!is_int($this->other['elapsed_ms'])) {
+            throw new \coding_exception("The 'elapsed_ms' value must be an integer.");
+        }
+        if (!is_bool($this->other['ok'])) {
+            throw new \coding_exception("The 'ok' value must be a boolean.");
         }
     }
 

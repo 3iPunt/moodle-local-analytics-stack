@@ -67,4 +67,75 @@ final class course_scope_test extends \advanced_testcase {
         $gen->enrol_user($user->id, $gen->create_course()->id, 'teacher');
         $this->assertSame([], course_scope::for_user((int) $user->id));
     }
+
+    /**
+     * A course where the teacher's enrolment is suspended or expired is dropped.
+     */
+    public function test_inactive_enrolment_is_dropped(): void {
+        $this->resetAfterTest();
+        $gen = $this->getDataGenerator();
+        $active = $gen->create_course();
+        $suspended = $gen->create_course();
+        $expired = $gen->create_course();
+        $teacher = $gen->create_user();
+        $gen->enrol_user($teacher->id, $active->id, 'editingteacher');
+        $gen->enrol_user($teacher->id, $suspended->id, 'editingteacher', 'manual', 0, 0, ENROL_USER_SUSPENDED);
+        $gen->enrol_user($teacher->id, $expired->id, 'editingteacher', 'manual', time() - 2 * DAYSECS, time() - DAYSECS);
+
+        $this->assertTrue(has_capability('local/askdata:ask', \context_course::instance($suspended->id), $teacher));
+        $this->assertSame([(int) $active->id], course_scope::for_user((int) $teacher->id));
+    }
+
+    /**
+     * A hidden course is kept only while the user can see hidden courses.
+     */
+    public function test_hidden_course_requires_viewhiddencourses(): void {
+        $this->resetAfterTest();
+        $gen = $this->getDataGenerator();
+        $visible = $gen->create_course();
+        $hidden = $gen->create_course(['visible' => 0]);
+        $teacher = $gen->create_user();
+        $gen->enrol_user($teacher->id, $visible->id, 'editingteacher');
+        $gen->enrol_user($teacher->id, $hidden->id, 'editingteacher');
+
+        $expected = [(int) $visible->id, (int) $hidden->id];
+        sort($expected);
+        $this->assertSame($expected, course_scope::for_user((int) $teacher->id));
+
+        $roleid = (int) $this->get_role_id('editingteacher');
+        $hiddencontext = \context_course::instance($hidden->id);
+        assign_capability('moodle/course:viewhiddencourses', CAP_PREVENT, $roleid, $hiddencontext->id, true);
+        accesslib_clear_all_caches_for_unit_testing();
+
+        $this->assertSame([(int) $visible->id], course_scope::for_user((int) $teacher->id));
+    }
+
+    /**
+     * A manager assigned at category level keeps the category's courses without being enrolled.
+     */
+    public function test_category_manager_without_enrolment(): void {
+        $this->resetAfterTest();
+        $gen = $this->getDataGenerator();
+        $category = $gen->create_category();
+        $c1 = $gen->create_course(['category' => $category->id]);
+        $c2 = $gen->create_course(['category' => $category->id]);
+        $gen->create_course();
+        $manager = $gen->create_user();
+        role_assign($this->get_role_id('manager'), $manager->id, \context_coursecat::instance($category->id));
+
+        $expected = [(int) $c1->id, (int) $c2->id];
+        sort($expected);
+        $this->assertSame($expected, course_scope::for_user((int) $manager->id));
+    }
+
+    /**
+     * Returns the id of a standard role.
+     *
+     * @param string $shortname Role short name.
+     * @return int
+     */
+    private function get_role_id(string $shortname): int {
+        global $DB;
+        return (int) $DB->get_field('role', 'id', ['shortname' => $shortname], MUST_EXIST);
+    }
 }

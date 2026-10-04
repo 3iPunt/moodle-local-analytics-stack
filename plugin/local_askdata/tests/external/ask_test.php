@@ -280,4 +280,51 @@ final class ask_test extends \advanced_testcase {
         $this->expectException(service_exception::class);
         ask::execute((int) $c1->id, 'Anything');
     }
+
+    /**
+     * Failures outside the service call are audited as well.
+     */
+    public function test_every_failure_is_logged(): void {
+        set_config('sharedsecret', '', 'local_askdata');
+        [$teacher, $c1] = $this->setup_courses();
+        $this->setUser($teacher);
+        $sink = $this->redirectEvents();
+
+        foreach (['Anything', '   '] as $question) {
+            try {
+                ask::execute((int) $c1->id, $question);
+                $this->fail('Expected an exception');
+            } catch (\moodle_exception $e) {
+                $this->assertContains($e->errorcode, ['error_notconfigured', 'invalidparameter']);
+            }
+        }
+
+        $events = array_values(array_filter($sink->get_events(), fn($e) => $e instanceof question_asked));
+        $this->assertCount(2, $events);
+        foreach ($events as $event) {
+            $this->assertFalse($event->other['ok']);
+            $this->assertIsInt($event->other['elapsed_ms']);
+            $this->assertSame((int) $c1->id, (int) $event->courseid);
+        }
+        $this->assertSame('Anything', $events[0]->other['question']);
+    }
+
+    /**
+     * The event refuses badly typed data.
+     */
+    public function test_event_validates_types(): void {
+        $course = $this->getDataGenerator()->create_course();
+        $context = \context_course::instance($course->id);
+        $valid = ['question' => 'Q', 'courseids' => [(int) $course->id], 'elapsed_ms' => 5, 'ok' => true];
+        $this->assertInstanceOf(question_asked::class, question_asked::create(['context' => $context, 'other' => $valid]));
+
+        foreach (['ok' => 1, 'elapsed_ms' => '5', 'courseids' => '2', 'question' => null] as $key => $bad) {
+            try {
+                question_asked::create(['context' => $context, 'other' => array_merge($valid, [$key => $bad])]);
+                $this->fail("Expected coding_exception for {$key}");
+            } catch (\coding_exception $e) {
+                $this->assertStringContainsString($key, $e->getMessage());
+            }
+        }
+    }
 }

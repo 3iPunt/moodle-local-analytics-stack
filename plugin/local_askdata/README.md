@@ -28,27 +28,24 @@ php public/admin/cli/cfg.php --component=local_askdata --name=sharedsecret --set
 
 ### cURL security settings
 
-Moodle checks every outgoing request against "cURL blocked hosts list" (`curlsecurityblockedhosts`) and "cURL allowed ports" (`curlsecurityallowedport`). A blocked request never leaves Moodle and the user sees "The analytics service is not reachable right now". For the stack:
+Moodle checks every outgoing request against "cURL blocked hosts list" (`curlsecurityblockedhosts`) and "cURL allowed ports" (`curlsecurityallowedport`). A blocked request never leaves Moodle and the user sees "The analytics service is not reachable right now". The default lists block every private range (Docker networks included) and only allow ports 443 and 80, so the plugin cannot reach `http://analytics:8000` out of the box.
 
-- the analytics host (`analytics`, or its private IP range) must not be in `curlsecurityblockedhosts`. The default list blocks 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12 and 192.168.0.0/16, which covers Docker networks. Remove the range the service lives in.
-- `curlsecurityallowedport` must include `8000`, or be empty (all ports allowed). The default list only has 443 and 80.
+Do not remove `172.16.0.0/12` (or any other private range) from the blocked list: that would let Moodle reach every container and host service in that range. In the demo stack, `scripts/moodle/configure-askdata.sh` (`make configure-plugin`, also run by the container on start) changes exactly this:
 
-```
-php public/admin/cli/cfg.php --name=curlsecurityallowedport --set="$(printf '443\n80\n8000')"
-php public/admin/cli/cfg.php --name=curlsecurityblockedhosts --set="$(printf '127.0.0.0/8\n192.168.0.0/16\n10.0.0.0/8\n0.0.0.0\nlocalhost\n169.254.169.254\n0000::1')"
-```
+- `curlsecurityallowedport`: `443`, `80` and the service port (`8000`).
+- `curlsecurityblockedhosts`: Moodle's default list, except that the private range holding `BACKEND_SUBNET` is replaced by its exact complement. Only the backend subnet (default `172.28.0.0/24`) becomes reachable; the rest of `172.16.0.0/12` stays blocked.
 
-The second line is the core default minus `172.16.0.0/12`. Adjust it to your network.
+Run it with `--dry-run` to see the values without changing anything. Outside the stack, apply the same idea: unblock only the subnet or host where the service runs.
 
 ## Security model
 
 - The browser only calls Moodle (`local_askdata_ask`, AJAX, login required). Moodle calls the analytics service from the server with `\curl`. The service URL and secret never reach the browser.
 - Each request carries `X-Askdata-Timestamp` (Unix seconds) and `X-Askdata-Signature`, the hex HMAC-SHA256 of `timestamp + "\n" + raw body` with the shared secret. The service rejects signatures older or newer than 300 seconds and replays inside that window.
 - The capability is checked in the course context before anything is sent.
-- `course_ids` lists every course where the user holds `local/askdata:ask` (`get_user_capability_course(..., doanything = false)`), plus the current course. A teacher in DA101 and STAT201 can only get answers about those two. Site administrators without a course role only get the current course.
+- `course_ids` lists every course where the user holds `local/askdata:ask` (`get_user_capability_course(..., doanything = false)`), plus the current course. Courses where the user's enrolment is suspended or expired are left out, and so are hidden courses unless the user can see hidden courses (`moodle/course:viewhiddencourses`). Category or system roles without an enrolment (managers) still count. A teacher in DA101 and STAT201 can only get answers about those two. Site administrators without a course role only get the current course.
 - No names, emails or usernames leave Moodle. The user is sent as `user_ref`, an HMAC-SHA256 of the user id with the shared secret.
 - Error responses from the service are reduced to their `message` (4xx only, plain text, at most 300 characters). 5xx bodies and transport errors are replaced by a generic message.
-- Every question is logged as `\local_askdata\event\question_asked` (course context) with the question, the course ids, the elapsed time and whether it succeeded.
+- Every question that passes the capability check is logged as `\local_askdata\event\question_asked` (course context), including failed ones (invalid question, plugin not configured, service errors). The event stores the full question text in the Moodle log (`logstore_standard_log.other`), together with the course ids, the elapsed time and whether an answer came back. Anyone who can read the course logs can read the questions, and they are kept as long as the log retention setting says. Privacy requests export and delete them with the user's other log entries (the log store's privacy provider).
 
 Request body:
 
@@ -60,30 +57,13 @@ Expected success response: `{"sql": "...", "columns": [...], "rows": [[...]], "e
 
 ## Running the PHPUnit tests in the stack
 
-The stack image runs `composer install --no-dev`, so PHPUnit is not installed. Inside the moodle container, from `/var/www/html`:
+The stack image installs Composer dev dependencies and its `config.php` sets `phpunit_prefix = 'phpu_'` and `phpunit_dataroot = '/var/www/phpunitdata'`. From the repository root:
 
-1. Add the PHPUnit settings to `config.php`, before the `require_once` of `lib/setup.php`:
+```
+make test-plugin
+```
 
-   ```php
-   $CFG->phpunit_prefix = 'phpu_';
-   $CFG->phpunit_dataroot = '/var/www/phpunitdata';
-   ```
-
-2. Install the dev dependencies and initialise the test site:
-
-   ```
-   mkdir -p /var/www/phpunitdata && chown www-data:www-data /var/www/phpunitdata
-   composer install --working-dir=/var/www/html --no-interaction --no-progress
-   php public/admin/tool/phpunit/cli/init.php
-   ```
-
-3. Run the plugin tests:
-
-   ```
-   vendor/bin/phpunit --testsuite local_askdata_testsuite
-   ```
-
-   `vendor/bin/phpunit public/local/askdata/tests` also works.
+It initialises the PHPUnit site on the first run (`admin/tool/phpunit/cli/init.php`, a few minutes) and then runs `vendor/bin/phpunit --testsuite local_askdata_testsuite` as `www-data` inside the moodle container.
 
 The tests never call the network. `\local_askdata\local\client::set_test_response()` replaces the HTTP call, and it is ignored outside PHPUnit.
 
