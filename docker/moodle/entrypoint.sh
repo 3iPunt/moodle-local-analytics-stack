@@ -96,6 +96,21 @@ install_if_needed() {
     as_www touch "$INSTALL_MARKER"
 }
 
+# Plugins bind-mounted from the host (local_askdata) may be newer than the database.
+# upgrade.php exits 0 with "no upgrade needed" when nothing changed.
+upgrade_if_needed() {
+    log "Running upgrade.php (no-op when nothing changed)"
+    as_www php "$APP_ROOT/admin/cli/upgrade.php" --non-interactive
+}
+
+# Idempotent; a missing secret must not keep Moodle down, so failures only warn.
+configure_askdata() {
+    local script=/opt/stack/scripts/configure-askdata.sh
+    [ -f "$script" ] || { log "No $script, skipping local_askdata configuration"; return 0; }
+    log "Configuring local_askdata"
+    bash "$script" || log "WARNING: configure-askdata.sh failed (status $?); the plugin will not reach the service"
+}
+
 run_cron() {
     log "Waiting for installation to complete"
     until [ -f "$INSTALL_MARKER" ] && is_installed; do sleep 5; done
@@ -120,6 +135,8 @@ case "${1:-}" in
         ;;
     apache2-foreground)
         install_if_needed
+        upgrade_if_needed
+        configure_askdata
         exec moodle-docker-php-entrypoint "$@"
         ;;
     *)

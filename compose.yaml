@@ -66,11 +66,17 @@ services:
     environment:
       <<: *moodle-env
       MOODLE_ADMIN_PASSWORD: ${MOODLE_ADMIN_PASSWORD}
+      # Read by scripts/moodle/configure-askdata.sh, which the entrypoint runs on every start.
+      ASKDATA_SHARED_SECRET: ${ASKDATA_SHARED_SECRET}
+      ASKDATA_SERVICE_URL: ${ANALYTICS_URL:-http://analytics:8000}
+      BACKEND_SUBNET: ${BACKEND_SUBNET:-172.28.0.0/24}
     init: true
     volumes:
       - moodledata:/var/www/moodledata
       - phpunitdata:/var/www/phpunitdata
       - ./scripts/moodle:/opt/stack/scripts:ro
+      # Overrides the copy baked into the image, so plugin edits need no rebuild.
+      - ./plugin/local_askdata:/var/www/html/public/local/askdata:ro
     depends_on:
       db:
         condition: service_healthy
@@ -114,6 +120,8 @@ services:
       <<: *moodle-env
     volumes:
       - moodledata:/var/www/moodledata
+      # Same code as moodle, otherwise cron sees a pending upgrade and stops.
+      - ./plugin/local_askdata:/var/www/html/public/local/askdata:ro
     depends_on:
       db:
         condition: service_healthy

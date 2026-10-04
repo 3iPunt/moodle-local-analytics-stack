@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Configures Moodle for local_askdata. Runs inside the moodle container, idempotent:
 #   docker compose exec -T moodle bash /opt/stack/scripts/configure-askdata.sh [--dry-run]
+# The moodle entrypoint runs it on every start (ASKDATA_SHARED_SECRET and BACKEND_SUBNET
+# come from compose.yaml); `make configure-plugin` runs it on demand.
 #
 # - local_askdata/serviceurl   = ASKDATA_SERVICE_URL (default http://analytics:8000)
 # - local_askdata/sharedsecret = ASKDATA_SHARED_SECRET
@@ -107,8 +109,10 @@ foreach ($settings as [$component, $name, $value, $hidden]) {
     }
 }
 
-if (!$dryrun) {
+if (!$dryrun && $changed > 0) {
     purge_all_caches();
     cli_writeln("$changed setting(s) changed; caches purged.");
+} else if (!$dryrun) {
+    cli_writeln('Nothing changed.');
 }
 PHP
