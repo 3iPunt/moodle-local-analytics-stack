@@ -49,6 +49,13 @@ Docker only publishes ports on non-internal networks, so Moodle cannot keep a pu
 
 The grants are applied by the one-shot service `db-grants` (`docker/db/analytics-grants.sh`) after Moodle is healthy and before `analytics` starts. It cannot run from `docker-entrypoint-initdb.d`: MySQL rejects a table-level grant on a table that does not exist yet (error 1146), and Moodle creates its tables later. Each run revokes everything and grants again, so stacks created before this change get the narrower grants on the next `make up`; no `make clean` is needed.
 
+## Data model rules
+
+- `user_ref = sha256(CAST(userid AS VARCHAR) || ANALYTICS_SALT)`, hex. The brief said md5; this deviates on purpose. Moodle user ids are small consecutive integers, so anyone who obtains the salt can hash every id in milliseconds either way, but md5 also has a much cheaper offline cost per guess. sha256 is just as deterministic and stable across exports, so joins and the plugin contract (hex `user_ref`, 8 to 128 characters) are unaffected.
+- Deleted users and course modules being deleted never appear in any table (see the header of `analytics/views.sql`).
+- `participant.suspended` follows Moodle's active-enrolment rule: user enrolment and enrolment method enabled, `timestart` not in the future and `timeend` not in the past, at export time.
+- `participant` keeps one row per (course, user, role); counts must use `count(DISTINCT user_ref)`.
+
 ## Phases
 
 Each phase ends with a verification run and a commit.

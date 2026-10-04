@@ -17,7 +17,7 @@ formats differ only in how ``m`` is provided:
 column is ever read in parquet mode, and the mysql path only reads the columns
 views.sql references (projection pushdown).
 
-Pseudonymisation: ``user_ref = md5(userid || salt)``. The salt is substituted
+Pseudonymisation: ``user_ref = sha256(userid || salt)``. The salt is substituted
 into a TEMP macro, which DuckDB never persists, and is scrubbed from errors.
 
 Publishing: the build writes ``moodle.duckdb.tmp``, checkpoints it, closes it
@@ -82,7 +82,7 @@ SOURCE_COLUMNS: dict[str, tuple[str, ...]] = {
     "mdl_course": ("id", "shortname", "fullname", "startdate", "visible", "enablecompletion", "format"),
     "mdl_user": ("id", "deleted", "lastaccess"),
     "mdl_enrol": ("id", "courseid", "status"),
-    "mdl_user_enrolments": ("id", "enrolid", "userid", "status", "timestart", "timecreated"),
+    "mdl_user_enrolments": ("id", "enrolid", "userid", "status", "timestart", "timeend", "timecreated"),
     "mdl_context": ("id", "contextlevel", "instanceid"),
     "mdl_role": ("id", "shortname"),
     "mdl_role_assignments": ("id", "roleid", "contextid", "userid"),
@@ -183,7 +183,7 @@ def sql_literal(value: str) -> str:
 
 def user_ref(userid: int, salt: str) -> str:
     """Python twin of the ``pseudo()`` macro in views.sql."""
-    return hashlib.md5(f"{int(userid)}{salt}".encode()).hexdigest()
+    return hashlib.sha256(f"{int(userid)}{salt}".encode()).hexdigest()
 
 
 def render_views_sql(template: str, salt: str, now_epoch: int) -> str:

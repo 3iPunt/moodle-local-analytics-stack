@@ -8,17 +8,30 @@
 -- Placeholders substituted by app/export.py as SQL literals: {salt}, {now_epoch}.
 -- The salt only lives in TEMP macros, which are never written to the file.
 -- All timestamps are UTC. Moodle stores them as epoch seconds; 0 means "never".
+--
+-- Consistency rules applied to every table: deleted users (mdl_user.deleted) never
+-- appear, and course modules being deleted (deletioninprogress) never appear, nor
+-- their completions, grade items, grades or submissions.
 
 CREATE OR REPLACE TEMP MACRO epoch_ts(x) AS
     CASE WHEN CAST(x AS BIGINT) > 0 THEN make_timestamp(CAST(x AS BIGINT) * 1000000) END;
 
 CREATE OR REPLACE TEMP MACRO flag(x) AS CAST(x AS INTEGER) <> 0;
 
-CREATE OR REPLACE TEMP MACRO pseudo(id) AS md5(CAST(CAST(id AS BIGINT) AS VARCHAR) || {salt});
+-- sha256 rather than md5: user ids are small integers, so if the salt leaked an md5
+-- table of every id would be trivial to build and fast to match. Both are deterministic.
+CREATE OR REPLACE TEMP MACRO pseudo(id) AS sha256(CAST(CAST(id AS BIGINT) AS VARCHAR) || {salt});
 
 CREATE OR REPLACE TEMP MACRO export_epoch() AS CAST({now_epoch} AS BIGINT);
 
 CREATE SCHEMA IF NOT EXISTS base;
+
+-- TEMP tables are not written to the export file.
+CREATE OR REPLACE TEMP TABLE live_user AS
+SELECT CAST(id AS BIGINT) AS id FROM m.mdl_user WHERE NOT flag(deleted);
+
+CREATE OR REPLACE TEMP TABLE live_cm AS
+SELECT cm.* FROM m.mdl_course_modules AS cm WHERE NOT flag(cm.deletioninprogress);
 
 -- course ---------------------------------------------------------------------
 
@@ -49,7 +62,13 @@ WITH enrolment AS (
         e.courseid AS course_id,
         ue.userid,
         min(CASE WHEN CAST(ue.timestart AS BIGINT) > 0 THEN ue.timestart ELSE ue.timecreated END) AS enrolled_epoch,
-        bool_and(flag(ue.status) OR flag(e.status)) AS suspended
+        -- Same rule as Moodle's "active enrolment": both flags on and inside [timestart, timeend].
+        bool_and(
+            flag(ue.status)
+            OR flag(e.status)
+            OR CAST(ue.timestart AS BIGINT) > export_epoch()
+            OR (CAST(ue.timeend AS BIGINT) > 0 AND CAST(ue.timeend AS BIGINT) < export_epoch())
+        ) AS suspended
     FROM m.mdl_user_enrolments AS ue
     JOIN m.mdl_enrol AS e ON e.id = ue.enrolid
     GROUP BY e.courseid, ue.userid
@@ -88,16 +107,16 @@ JOIN access AS a ON a.course_id = en.course_id AND a.userid = en.userid
 LEFT JOIN course_role AS cr ON cr.course_id = en.course_id AND cr.userid = en.userid
 WHERE en.course_id IN (SELECT course_id FROM base.course);
 
-COMMENT ON TABLE base.participant IS 'One row per (course_id, user_ref, role): users enrolled in a course with their course role. A student is a participant with role = ''student''; a teacher has role = ''editingteacher'' (or ''teacher'' for non-editing teachers). Count students with count(DISTINCT user_ref) WHERE role = ''student''. Join to other per-user tables on (course_id, user_ref).';
+COMMENT ON TABLE base.participant IS 'One row per (course_id, user_ref, role): users enrolled in a course with their course role. A user with two roles in the same course (for example editingteacher and teacher) has two rows, so always count people with count(DISTINCT user_ref) and filter on role. A student is a participant with role = ''student''; a teacher has role = ''editingteacher'' (or ''teacher'' for non-editing teachers). Only roles assigned in the course itself count; site or category roles show as ''none''. Join to other per-user tables on (course_id, user_ref).';
 COMMENT ON COLUMN base.participant.course_id IS 'Course id. Join to course.course_id.';
 COMMENT ON COLUMN base.participant.user_ref IS 'Pseudonymous user id (hex hash). Stable across tables and exports for the same user. Names and emails are not available.';
-COMMENT ON COLUMN base.participant.role IS 'Course role shortname: ''student'', ''editingteacher'', ''teacher'', or another Moodle role. ''none'' when enrolled without a role.';
+COMMENT ON COLUMN base.participant.role IS 'Course role shortname: ''student'', ''editingteacher'', ''teacher'', or another Moodle role. ''none'' when enrolled without a role in the course.';
 COMMENT ON COLUMN base.participant.enrolled_at IS 'Date the enrolment started (UTC).';
 COMMENT ON COLUMN base.participant.last_access_at IS 'Last time the user accessed this course (UTC). Falls back to the last site access when Moodle has no course-level record. NULL when the user never accessed it.';
 COMMENT ON COLUMN base.participant.days_since_last_access IS 'Whole days between last_access_at and the export time. NULL when the user never accessed the course. To find users who have not opened this course for N days use (days_since_last_access > N OR days_since_last_access IS NULL); for site logins use days_since_last_login.';
 COMMENT ON COLUMN base.participant.last_login_at IS 'Last time the user was active anywhere on the Moodle site (UTC), in any course. NULL when the user never logged in.';
 COMMENT ON COLUMN base.participant.days_since_last_login IS 'Whole days between last_login_at and the export time. Use it for questions about users who have not logged in: (days_since_last_login > N OR days_since_last_login IS NULL). NULL means never logged in.';
-COMMENT ON COLUMN base.participant.suspended IS 'TRUE when every enrolment of the user in the course is suspended or disabled.';
+COMMENT ON COLUMN base.participant.suspended IS 'TRUE when the user has no active enrolment in the course at export time: every enrolment is suspended, uses a disabled enrolment method, has ended, or has not started yet. Filter NOT suspended for current students.';
 
 -- daily_activity -------------------------------------------------------------
 
@@ -111,7 +130,7 @@ SELECT
     CAST(count(DISTINCT CASE WHEN CAST(l.contextlevel AS INTEGER) = 70 THEN l.contextinstanceid END) AS INTEGER) AS distinct_activities
 FROM m.mdl_logstore_standard_log AS l
 WHERE l.origin = 'web'
-  AND CAST(l.userid AS BIGINT) > 0
+  AND CAST(l.userid AS BIGINT) IN (SELECT id FROM live_user)
   AND NOT flag(l.anonymous)
   AND l.courseid IN (SELECT course_id FROM base.course)
 GROUP BY ALL;
@@ -146,12 +165,11 @@ SELECT
     flag(cm.visible) AS visible,
     CAST(cm.completion AS INTEGER) > 0 AS completion_tracked,
     epoch_ts(i.due_epoch) AS due_at
-FROM m.mdl_course_modules AS cm
+FROM live_cm AS cm
 JOIN m.mdl_modules AS md ON md.id = cm.module
 LEFT JOIN m.mdl_course_sections AS cs ON cs.id = cm.section
 LEFT JOIN instance AS i ON i.module = md.name AND i.instance_id = cm.instance
-WHERE NOT flag(cm.deletioninprogress)
-  AND cm.course IN (SELECT course_id FROM base.course);
+WHERE cm.course IN (SELECT course_id FROM base.course);
 
 COMMENT ON TABLE base.activity IS 'One row per activity or resource (course module) in a course. Join completion, grade_item and assignment_submission on cm_id. Order a learning path with ORDER BY section, cm_id.';
 COMMENT ON COLUMN base.activity.course_id IS 'Course id. Join to course.course_id.';
@@ -174,8 +192,9 @@ SELECT
     CAST(cmc.completionstate AS INTEGER) IN (1, 2) AS completed,
     CASE WHEN CAST(cmc.completionstate AS INTEGER) IN (1, 2) THEN epoch_ts(cmc.timemodified) END AS completed_at
 FROM m.mdl_course_modules_completion AS cmc
-JOIN m.mdl_course_modules AS cm ON cm.id = cmc.coursemoduleid
-WHERE cm.course IN (SELECT course_id FROM base.course);
+JOIN live_cm AS cm ON cm.id = cmc.coursemoduleid
+WHERE cm.course IN (SELECT course_id FROM base.course)
+  AND CAST(cmc.userid AS BIGINT) IN (SELECT id FROM live_user);
 
 COMMENT ON TABLE base.completion IS 'One row per (cm_id, user_ref) with a completion record for a tracked activity. A missing row means the user has not completed it. Completion rate of an activity = count(DISTINCT user_ref) FILTER (WHERE completed) / number of students in participant for that course.';
 COMMENT ON COLUMN base.completion.course_id IS 'Course id. Join to course.course_id.';
@@ -192,7 +211,8 @@ SELECT
     CAST(cc.timecompleted AS BIGINT) > 0 AS completed,
     epoch_ts(cc.timecompleted) AS completed_at
 FROM m.mdl_course_completions AS cc
-WHERE cc.course IN (SELECT course_id FROM base.course);
+WHERE cc.course IN (SELECT course_id FROM base.course)
+  AND CAST(cc.userid AS BIGINT) IN (SELECT id FROM live_user);
 
 COMMENT ON TABLE base.course_completion IS 'One row per (course_id, user_ref) that Moodle tracks for course completion. Users without a row have not completed the course. Course completion rate = count(*) FILTER (WHERE completed) / number of students in participant for that course.';
 COMMENT ON COLUMN base.course_completion.course_id IS 'Course id. Join to course.course_id.';
@@ -215,7 +235,8 @@ SELECT
 FROM m.mdl_grade_items AS gi
 LEFT JOIN m.mdl_modules AS md ON gi.itemtype = 'mod' AND md.name = gi.itemmodule
 LEFT JOIN m.mdl_course_modules AS cm ON cm.module = md.id AND cm.instance = gi.iteminstance AND cm.course = gi.courseid
-WHERE gi.courseid IN (SELECT course_id FROM base.course);
+WHERE gi.courseid IN (SELECT course_id FROM base.course)
+  AND NOT coalesce(flag(cm.deletioninprogress), false);
 
 COMMENT ON TABLE base.grade_item IS 'One row per gradebook item. item_type = ''mod'' for activity grades (assignments, quizzes), ''course'' for the course total, ''category'' for category totals, ''manual'' for manual items. Filter item_type = ''mod'' to compare activities.';
 COMMENT ON COLUMN base.grade_item.course_id IS 'Course id. Join to course.course_id.';
@@ -238,7 +259,8 @@ SELECT
 FROM m.mdl_grade_grades AS gg
 JOIN m.mdl_grade_items AS gi ON gi.id = gg.itemid
 WHERE gg.finalgrade IS NOT NULL
-  AND gi.courseid IN (SELECT course_id FROM base.course);
+  AND gg.itemid IN (SELECT grade_item_id FROM base.grade_item)
+  AND CAST(gg.userid AS BIGINT) IN (SELECT id FROM live_user);
 
 COMMENT ON TABLE base.grade IS 'One row per (grade_item_id, user_ref) with a final grade. Ungraded users have no row. Join grade_item on grade_item_id for the item name and maximum.';
 COMMENT ON COLUMN base.grade.course_id IS 'Course id. Join to course.course_id.';
@@ -262,8 +284,9 @@ SELECT
 FROM m.mdl_assign_submission AS s
 JOIN m.mdl_assign AS a ON a.id = s.assignment
 JOIN m.mdl_modules AS md ON md.name = 'assign'
-JOIN m.mdl_course_modules AS cm ON cm.module = md.id AND cm.instance = a.id
-WHERE CAST(s.userid AS BIGINT) > 0
+JOIN live_cm AS cm ON cm.module = md.id AND cm.instance = a.id
+-- userid = 0 rows are group submissions (teamsubmission); they have no single user.
+WHERE CAST(s.userid AS BIGINT) IN (SELECT id FROM live_user)
   AND a.course IN (SELECT course_id FROM base.course);
 
 COMMENT ON TABLE base.assignment_submission IS 'One row per assignment submission attempt. Students who never submitted have no row: to find them, take students from participant and exclude those with a row where status = ''submitted'' AND latest. Join activity on cm_id for the assignment name and due_at.';

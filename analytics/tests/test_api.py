@@ -51,7 +51,7 @@ def test_health_is_503_without_export_then_ok(settings):
         body = r.json()
         assert body["status"] == "ok" and body["db_file"] is True
         assert body["source"] == "mysql"
-        assert body["row_counts"]["participant"] == 4
+        assert body["row_counts"]["participant"] == 7
         assert body["last_export"].startswith("2026-09-21")
 
 

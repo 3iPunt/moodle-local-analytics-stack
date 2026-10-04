@@ -4,7 +4,7 @@
 mdl_course id,shortname,fullname,startdate,visible,enablecompletion,format
 mdl_user id,deleted,lastaccess
 mdl_enrol id,courseid,status
-mdl_user_enrolments id,enrolid,userid,status,timestart,timecreated
+mdl_user_enrolments id,enrolid,userid,status,timestart,timeend,timecreated
 mdl_context id,contextlevel,instanceid
 mdl_role id,shortname
 mdl_role_assignments id,roleid,contextid,userid

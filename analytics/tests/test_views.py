@@ -37,9 +37,10 @@ def ts(epoch):
     return dt.datetime.fromtimestamp(epoch, dt.timezone.utc).replace(tzinfo=None)
 
 
-def test_user_ref_matches_duckdb_md5():
-    expected = duckdb.sql(f"SELECT md5('10' || '{SALT}')").fetchone()[0]
+def test_user_ref_matches_duckdb_sha256():
+    expected = duckdb.sql(f"SELECT sha256('10' || '{SALT}')").fetchone()[0]
     assert user_ref(10, SALT) == expected
+    assert len(expected) == 64
 
 
 def test_row_counts_are_returned_for_every_table(built):
@@ -47,7 +48,7 @@ def test_row_counts_are_returned_for_every_table(built):
     assert set(counts) == set(TABLES)
     assert counts == {
         "course": 2,
-        "participant": 4,
+        "participant": 7,
         "daily_activity": 2,
         "activity": 4,
         "completion": 3,
@@ -74,14 +75,39 @@ def test_participant_roles_access_and_pseudonyms(built):
         con,
         "SELECT course_id, user_ref, role, enrolled_at, last_access_at, days_since_last_access, "
         "days_since_last_login, suspended "
-        "FROM base.participant ORDER BY course_id, role, days_since_last_access NULLS LAST",
+        "FROM base.participant ORDER BY course_id, role, days_since_last_access NULLS LAST, enrolled_at",
     )
     assert got == [
         (2, user_ref(12, SALT), "editingteacher", ts(NOW - 40 * DAY).date(), ts(NOW - 2 * DAY), 2, 2, False),
+        (2, user_ref(14, SALT), "student", ts(NOW - 50 * DAY).date(), ts(NOW - 3 * DAY), 3, 3, True),
         (2, user_ref(10, SALT), "student", ts(NOW - 30 * DAY).date(), ts(NOW - 20 * DAY - 3600), 20, 1, False),
         (2, user_ref(11, SALT), "student", ts(NOW - 29 * DAY).date(), None, None, None, False),
+        (2, user_ref(15, SALT), "student", ts(NOW + 5 * DAY).date(), None, None, None, True),
+        (2, user_ref(12, SALT), "teacher", ts(NOW - 40 * DAY).date(), ts(NOW - 2 * DAY), 2, 2, False),
         (3, user_ref(10, SALT), "student", ts(NOW - 10 * DAY).date(), ts(NOW - DAY), 1, 1, True),
     ]
+
+
+def test_participant_has_one_row_per_role_and_no_deleted_users(built):
+    con, _, _ = built
+    roles = rows(con, f"SELECT role FROM base.participant WHERE course_id = 2 AND user_ref = '{user_ref(12, SALT)}' ORDER BY role")
+    assert roles == [("editingteacher",), ("teacher",)]
+    assert rows(con, "SELECT count(DISTINCT user_ref) FROM base.participant WHERE course_id = 2")[0][0] == 5
+
+
+@pytest.mark.parametrize(
+    "table", ["participant", "daily_activity", "completion", "course_completion", "grade", "assignment_submission"]
+)
+def test_deleted_users_appear_nowhere(built, table):
+    con, _, _ = built
+    assert rows(con, f"SELECT count(*) FROM base.{table} WHERE user_ref = '{user_ref(13, SALT)}'") == [(0,)]
+
+
+@pytest.mark.parametrize("table", ["activity", "completion", "grade_item", "assignment_submission"])
+def test_modules_being_deleted_appear_nowhere(built, table):
+    con, _, _ = built
+    assert rows(con, f"SELECT count(*) FROM base.{table} WHERE cm_id IN (1004, 1005)") == [(0,)]
+    assert rows(con, "SELECT count(*) FROM base.grade WHERE grade_item_id = 54") == [(0,)]
 
 
 def test_daily_activity_counts_web_events_in_real_courses(built):

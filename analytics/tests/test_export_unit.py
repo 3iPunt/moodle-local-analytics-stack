@@ -31,9 +31,9 @@ def test_render_rejects_non_integer_epoch():
         render_views_sql("SELECT {now_epoch}", "s", "1; DROP")
 
 
-def test_user_ref_is_md5_of_id_and_salt():
+def test_user_ref_is_sha256_of_id_and_salt():
     assert user_ref(103, "s") != user_ref(103, "t")
-    assert user_ref(103, "s") == duckdb.sql("SELECT md5('103s')").fetchone()[0]
+    assert user_ref(103, "s") == duckdb.sql("SELECT sha256('103s')").fetchone()[0]
 
 
 def test_settings_from_env_defaults_and_hidden_secrets(tmp_path):
