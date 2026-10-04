@@ -65,7 +65,7 @@ Each phase ends with a verification run and a commit.
 - (b) demo data.
 - (c) analytics export, DuckDB views, COMMENTs.
 - (d) ollama + model-init + `/ask` end to end with the six demo questions.
-- (e) `local_askdata` plugin installed and working in the UI.
+- (e) `local_askdata` plugin installed and working in the UI. Done, see `docs/plugin.md`.
 - (f) network isolation and SQL guard tests.
 - (g) README.
 
