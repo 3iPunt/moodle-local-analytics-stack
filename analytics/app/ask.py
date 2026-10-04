@@ -58,6 +58,13 @@ This SQL failed:
 Fix the SQL. Error: {error}
 Reply with the corrected query in a single ```sql code block."""
 
+# ASCII only: str.isdigit() accepts "²" and int() then fails; hmac.compare_digest rejects non-ASCII str.
+_TIMESTAMP_RE = re.compile(r"[0-9]{1,12}")
+_SIGNATURE_RE = re.compile(r"[0-9a-f]{64}")
+
+# Longest guard or DuckDB error fed back to the model and returned to the caller.
+MAX_ERROR_CHARS = 300
+
 _WORD_RE = re.compile(r"[a-z0-9]+")
 _STOPWORDS = frozenset(
     "a an and are as at be by did do does each for from has have how i in is it its me my "
@@ -68,7 +75,7 @@ _STOPWORDS = frozenset(
 class ChatClient(Protocol):
     model: str
 
-    def chat(self, messages: list[dict[str, str]]) -> ChatResult: ...
+    def chat(self, messages: list[dict[str, str]], timeout_s: float | None = None) -> ChatResult: ...
 
 
 @dataclass(frozen=True)
@@ -128,13 +135,16 @@ def verify_request(
         raise AskError(503, "not_configured", "ASKDATA_SHARED_SECRET is not set; /ask is disabled")
     if not timestamp or not signature:
         raise AskError(401, "missing_auth", f"send {TIMESTAMP_HEADER} and {SIGNATURE_HEADER} headers")
-    if not timestamp.isdigit():
+    if not _TIMESTAMP_RE.fullmatch(timestamp):
         raise AskError(401, "bad_signature", f"{TIMESTAMP_HEADER} must be unix seconds")
+    signature = signature.strip().lower()
+    if not _SIGNATURE_RE.fullmatch(signature):
+        raise AskError(401, "bad_signature", f"{SIGNATURE_HEADER} must be 64 hex characters")
     now = time.time() if now is None else now
     if abs(now - int(timestamp)) > window_s:
         raise AskError(401, "expired", f"timestamp is outside the {window_s}s window; check the clocks")
     expected = sign(secret, timestamp, body)
-    if not hmac.compare_digest(expected, signature.strip().lower()):
+    if not hmac.compare_digest(expected, signature):
         raise AskError(401, "bad_signature", "signature does not match the request body")
 
 
@@ -190,7 +200,8 @@ class OllamaClient:
         self.keep_alive = keep_alive
         self.timeout_s = timeout_s
 
-    def chat(self, messages: list[dict[str, str]]) -> ChatResult:
+    def chat(self, messages: list[dict[str, str]], timeout_s: float | None = None) -> ChatResult:
+        timeout_s = self.timeout_s if timeout_s is None else timeout_s
         payload = {
             "model": self.model,
             "messages": messages,
@@ -206,15 +217,15 @@ class OllamaClient:
         )
         start = time.perf_counter()
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
+            with urllib.request.urlopen(request, timeout=timeout_s) as response:
                 body = json.load(response)
         except urllib.error.HTTPError as err:
             raise AskError(502, "model_unavailable", self._http_error(err)) from None
         except (TimeoutError, socket.timeout):
-            raise AskError(504, "timeout", f"the model did not answer within {self.timeout_s:g}s") from None
+            raise AskError(504, "timeout", f"the model did not answer within {timeout_s:g}s") from None
         except urllib.error.URLError as err:
             if isinstance(err.reason, (TimeoutError, socket.timeout)):
-                raise AskError(504, "timeout", f"the model did not answer within {self.timeout_s:g}s") from None
+                raise AskError(504, "timeout", f"the model did not answer within {timeout_s:g}s") from None
             raise AskError(502, "model_unavailable", f"Ollama is not reachable at {self.base_url}") from None
         except (OSError, ValueError):
             raise AskError(502, "model_unavailable", f"Ollama at {self.base_url} returned an unreadable answer") from None
@@ -283,6 +294,10 @@ def _jsonable(value: Any) -> Any:
     return str(value)
 
 
+def _clip(text: str, limit: int = MAX_ERROR_CHARS) -> str:
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
 def _duckdb_message(err: duckdb.Error) -> str:
     # Drop the "LINE n:" excerpt: it shows the guard's wrapper query, not the model's SQL.
     text = str(err).split("\n\nLINE ", 1)[0].split("\nLINE ", 1)[0]
@@ -300,8 +315,13 @@ def answer(
     query_timeout_s: float,
     tables: dict[str, str | None] | None = None,
     clock: Callable[[], float] = time.perf_counter,
+    model_budget_s: float | None = None,
 ) -> AskResult:
-    """Generate, guard and run SQL for ``question``; one retry with the error message."""
+    """Generate, guard and run SQL for ``question``; one retry with the error message.
+
+    ``model_budget_s`` bounds the time from the start of the request to the end of the last
+    model call, so the retry only gets what the first attempt left.
+    """
     tables = dict(QUERY_TABLES if tables is None else tables)
     allowed = set(tables)
     start = clock()
@@ -314,7 +334,13 @@ def answer(
         sql = ""
         reason, message = "sql_rejected", ""
         for attempt in (1, 2):
-            reply = client.chat(messages)
+            timeout_s = None
+            if model_budget_s is not None:
+                timeout_s = model_budget_s - (clock() - start)
+                if timeout_s < 1:
+                    message = f"the model did not answer within {model_budget_s:g}s"
+                    raise AskError(504, "timeout", message, sql=sql or None, attempts=attempt - 1)
+            reply = client.chat(messages, timeout_s=timeout_s)
             model_ms += reply.model_ms
             calls.append(
                 {
@@ -330,11 +356,11 @@ def answer(
             try:
                 columns, rows, _ = run_guarded(con, sql, allowed, max_rows + 1, query_timeout_s)
             except GuardError as err:
-                reason, message = "sql_rejected", err.message
+                reason, message = "sql_rejected", _clip(err.message)
             except QueryTimeout as err:
                 raise AskError(504, "timeout", str(err), sql=sql, attempts=attempt) from None
             except duckdb.Error as err:
-                reason, message = "sql_error", _duckdb_message(err)
+                reason, message = "sql_error", _clip(_duckdb_message(err))
             else:
                 sql_ms += (clock() - sql_start) * 1000.0
                 truncated = len(rows) > max_rows

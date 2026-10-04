@@ -177,6 +177,16 @@ def test_concurrent_refresh_returns_409(settings):
         assert first["r"].status_code == 200
 
 
+def test_refresh_rejects_an_oversized_body_before_reading_it(settings):
+    calls = []
+    with TestClient(create_app(settings, export_fn=lambda s: calls.append(1), refresh_on_startup=False)) as client:
+        body = b"x" * (64 * 1024 + 1)
+        r = client.post("/refresh", content=body, headers=auth_headers(body=body))
+    assert r.status_code == 413
+    assert r.json()["detail"]["reason"] == "too_large"
+    assert calls == []
+
+
 def test_refresh_failure_is_500_without_details(settings):
     def broken(s):
         raise RuntimeError("password=pw leaked")

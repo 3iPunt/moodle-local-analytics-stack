@@ -40,6 +40,24 @@ ExportFn = Callable[[Settings], ExportResult]
 STARTUP_RETRY_INITIAL_S = 5.0
 STARTUP_RETRY_MAX_S = 60.0
 
+# Largest request body accepted by /ask and /refresh. A valid /ask body is a few KiB.
+MAX_BODY_BYTES = 64 * 1024
+BUSY_RETRY_AFTER_S = 10
+
+
+async def read_body(request: Request, limit: int = MAX_BODY_BYTES) -> bytes:
+    """Read the raw body, refusing more than ``limit`` bytes before buffering them."""
+    length = request.headers.get("content-length")
+    if length is not None and length.isascii() and length.isdigit() and int(length) > limit:
+        raise AskError(413, "too_large", f"the request body is larger than {limit} bytes")
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > limit:
+            raise AskError(413, "too_large", f"the request body is larger than {limit} bytes")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
@@ -154,6 +172,9 @@ def create_app(
         settings.ollama_timeout_s,
     )
     examples = load_examples()
+    # Bounds the concurrent /ask requests, and with it the DuckDB memory in use:
+    # ASK_CONCURRENCY x DUCKDB_MEMORY_LIMIT.
+    ask_slots = threading.BoundedSemaphore(settings.ask_concurrency)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -187,7 +208,7 @@ def create_app(
     async def verify(request: Request, body: bytes | None = None) -> None:
         """Check the HMAC headers over ``body`` (read from the request when None)."""
         if body is None:
-            body = await request.body()
+            body = await read_body(request)
         verify_request(
             settings.askdata_secret,
             request.headers.get(TIMESTAMP_HEADER),
@@ -284,15 +305,9 @@ def create_app(
     @app.post("/ask", response_model=AskResponse)
     async def ask(request: Request):
         # The signature covers the exact bytes received, so read them before parsing.
-        raw = await request.body()
         try:
-            verify_request(
-                settings.askdata_secret,
-                request.headers.get(TIMESTAMP_HEADER),
-                request.headers.get(SIGNATURE_HEADER),
-                raw,
-                settings.replay_window_s,
-            )
+            raw = await read_body(request)
+            await verify(request, raw)
         except AskError as err:
             ask_log.info("ask rejected outcome=%s", err.reason)
             return ask_error(err)
@@ -303,6 +318,15 @@ def create_app(
             return JSONResponse(status_code=422, content={"detail": errors})
         if not settings.db_path.exists():
             return no_export()
+        if not ask_slots.acquire(blocking=False):
+            ask_log.info("ask rejected user_ref=%s outcome=busy", body.user_ref)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": {"reason": "busy", "message": "the service is answering other questions; try again shortly"}
+                },
+                headers={"Retry-After": str(BUSY_RETRY_AFTER_S)},
+            )
 
         max_rows = min(settings.max_rows, body.max_rows or settings.max_rows)
         ask_log.debug("ask user_ref=%s question=%r", body.user_ref, body.question)
@@ -319,6 +343,7 @@ def create_app(
                 examples,
                 settings.examples_top_k,
                 settings.query_timeout_s,
+                model_budget_s=settings.ollama_timeout_s,
             )
             attempts = result.attempts
             return result.to_dict()
@@ -333,6 +358,9 @@ def create_app(
                 content={"detail": {"reason": "internal_error", "message": "see the analytics service logs"}},
             )
         finally:
+            # run_in_threadpool waits for the worker thread even on cancellation, so the slot
+            # is only released once the DuckDB connection is closed.
+            ask_slots.release()
             ask_log.info(
                 "ask user_ref=%s courses=%d attempts=%d elapsed_ms=%.0f outcome=%s",
                 body.user_ref,

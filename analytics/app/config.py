@@ -44,7 +44,9 @@ class Settings:
     ollama_model: str = "qwen2.5-coder:14b"
     ollama_num_ctx: int = 8192
     ollama_keep_alive: str = "30m"
-    ollama_timeout_s: int = 180
+    # Time budget shared by the model calls of one /ask request.
+    ollama_timeout_s: int = 150
+    ask_concurrency: int = 2
     examples_top_k: int = 6
     query_timeout_s: int = 30
     export_timeout_s: int = 600
@@ -84,7 +86,8 @@ class Settings:
             ollama_model=env.get("OLLAMA_MODEL", "") or "qwen2.5-coder:14b",
             ollama_num_ctx=_int(env, "OLLAMA_NUM_CTX", 8192, 512),
             ollama_keep_alive=env.get("OLLAMA_KEEP_ALIVE", "") or "30m",
-            ollama_timeout_s=_int(env, "OLLAMA_TIMEOUT_S", 180, 1),
+            ollama_timeout_s=_int(env, "OLLAMA_TIMEOUT_S", 150, 1),
+            ask_concurrency=_int(env, "ASK_CONCURRENCY", 2, 1),
             examples_top_k=_int(env, "EXAMPLES_TOP_K", 6, 0),
             query_timeout_s=_int(env, "QUERY_TIMEOUT_S", 30, 1),
             export_timeout_s=_int(env, "EXPORT_TIMEOUT_S", 600, 1),

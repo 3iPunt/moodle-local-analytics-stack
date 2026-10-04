@@ -2,6 +2,7 @@
 
 import json
 import logging
+import threading
 import time
 
 import pytest
@@ -12,10 +13,12 @@ from app.ask import (
     ChatResult,
     Example,
     OllamaClient,
+    answer,
     build_messages,
     load_examples,
     select_examples,
     sign,
+    verify_request,
 )
 from app.config import Settings
 from app.main import create_app
@@ -32,10 +35,14 @@ class FakeModel:
     def __init__(self, *replies):
         self.replies = list(replies)
         self.calls = []
+        self.timeouts = []
 
-    def chat(self, messages):
+    def chat(self, messages, timeout_s=None):
         self.calls.append([dict(m) for m in messages])
+        self.timeouts.append(timeout_s)
         reply = self.replies.pop(0)
+        if callable(reply):
+            reply = reply()
         if isinstance(reply, Exception):
             raise reply
         return ChatResult(content=reply, model_ms=5.0, prompt_eval_tokens=42)
@@ -116,6 +123,109 @@ def test_bad_auth_is_401(settings, mutate, reason):
     assert r.status_code == 401
     assert r.json()["detail"]["reason"] == reason
     assert model.calls == []
+
+
+@pytest.mark.parametrize(
+    "timestamp, signature",
+    [
+        ("\u00b2", "0" * 64),
+        ("1" * 5000, "0" * 64),
+        ("1700000000", "\u00e9" * 64),
+        ("1700000000", "0" * 63),
+        ("1700000000", "g" * 64),
+        ("-1700000000", "0" * 64),
+        ("1700000000.5", "0" * 64),
+        ("\u0661\u0662", "0" * 64),
+    ],
+    ids=["superscript-two", "5000-digits", "non-ascii-signature", "short-signature", "non-hex", "negative", "decimal", "arabic-digits"],
+)
+def test_malformed_auth_headers_are_bad_signature(timestamp, signature):
+    with pytest.raises(AskError) as err:
+        verify_request(SECRET, timestamp, signature, b"{}", 300, now=1700000000)
+    assert (err.value.status, err.value.reason) == (401, "bad_signature")
+
+
+def test_signature_header_is_case_insensitive_hex():
+    ts = "1700000000"
+    verify_request(SECRET, ts, sign(SECRET, ts, b"{}").upper(), b"{}", 300, now=1700000000)
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"X-Askdata-Timestamp": "\u00b2".encode(), "X-Askdata-Signature": b"0" * 64},
+        {"X-Askdata-Timestamp": b"1" * 5000, "X-Askdata-Signature": b"0" * 64},
+        {"X-Askdata-Timestamp": str(int(time.time())).encode(), "X-Askdata-Signature": "\u00e9".encode() * 32},
+    ],
+    ids=["superscript-two", "5000-digits", "non-ascii-signature"],
+)
+def test_malformed_auth_headers_over_http_are_401(settings, headers):
+    model = FakeModel(GOOD_SQL)
+    with make_client(settings, model) as client:
+        r = client.post("/ask", content=json.dumps(BODY).encode(), headers={"Content-Type": "application/json", **headers})
+    assert r.status_code == 401
+    assert r.json()["detail"]["reason"] == "bad_signature"
+    assert model.calls == []
+
+
+def test_oversized_body_is_413_before_auth(settings):
+    model = FakeModel(GOOD_SQL)
+    with make_client(settings, model) as client:
+        raw, headers = signed({**BODY, "question": "x" * 70_000})
+        r = client.post("/ask", content=raw, headers=headers)
+    assert r.status_code == 413
+    assert r.json()["detail"]["reason"] == "too_large"
+    assert model.calls == []
+
+
+def test_oversized_chunked_body_is_413(settings):
+    model = FakeModel(GOOD_SQL)
+    with make_client(settings, model) as client:
+        chunks = (b"x" * 16_384 for _ in range(5))
+        r = client.post("/ask", content=chunks, headers={"X-Askdata-Timestamp": "1", "X-Askdata-Signature": "0" * 64})
+    assert r.status_code == 413
+    assert model.calls == []
+
+
+def test_ask_is_503_busy_when_all_slots_are_taken(tmp_path):
+    settings = Settings.from_env(
+        {**ENV, "DATA_DIR": str(tmp_path), "ASKDATA_SHARED_SECRET": SECRET, "ASK_CONCURRENCY": "1"}
+    )
+    entered, release = threading.Event(), threading.Event()
+
+    def slow():
+        entered.set()
+        release.wait(10)
+        return GOOD_SQL
+
+    model = FakeModel(slow, GOOD_SQL)
+    with make_client(settings, model) as client:
+        first = {}
+        t = threading.Thread(target=lambda: first.update(r=ask(client, BODY)))
+        t.start()
+        assert entered.wait(10)
+        busy = ask(client, BODY)
+        release.set()
+        t.join(10)
+        after = ask(client, BODY)
+    assert busy.status_code == 503
+    assert busy.json()["detail"]["reason"] == "busy"
+    assert busy.headers.get("retry-after")
+    assert first["r"].status_code == 200
+    assert after.status_code == 200
+    assert len(model.calls) == 2
+
+
+def test_ask_concurrency_setting():
+    base = {**ENV, "ASKDATA_SHARED_SECRET": SECRET}
+    assert Settings.from_env(base).ask_concurrency == 2
+    assert Settings.from_env({**base, "ASK_CONCURRENCY": "4"}).ask_concurrency == 4
+    with pytest.raises(ValueError):
+        Settings.from_env({**base, "ASK_CONCURRENCY": "0"})
+
+
+def test_ollama_timeout_defaults_to_150():
+    assert Settings.from_env({**ENV}).ollama_timeout_s == 150
 
 
 def test_signature_covers_the_raw_body(settings):
@@ -280,6 +390,46 @@ def test_double_execution_failure_is_422_sql_error_without_trace(settings):
     assert r.status_code == 422 and detail["reason"] == "sql_error"
     assert "nope" in detail["message"]
     assert "Traceback" not in r.text and "LINE" not in detail["message"]
+
+
+def test_error_fed_back_to_the_model_is_truncated(settings):
+    long_name = "n" * 2000
+    model = FakeModel(f"```sql\nSELECT {long_name} FROM course\n```", GOOD_SQL)
+    with make_client(settings, model) as client:
+        r = ask(client, BODY)
+    assert r.status_code == 200
+    retry = model.calls[1][-1]["content"]
+    error = retry.split("Error: ", 1)[1].split("\nReply with", 1)[0]
+    assert len(error) <= 300
+    assert error.endswith("...")
+
+
+def _slow_bad_reply(now, seconds):
+    def reply():
+        now[0] += seconds
+        return "```sql\nSELECT nope FROM course\n```"
+
+    return reply
+
+
+def test_model_calls_share_one_time_budget(settings):
+    now = [0.0]
+    model = FakeModel(_slow_bad_reply(now, 40), GOOD_SQL)
+    with make_client(settings, FakeModel()) as client:
+        db_path = str(client.app.state.settings.db_path)
+    answer(BODY["question"], [2], 10, db_path, model, [], 0, 5, model_budget_s=150, clock=lambda: now[0])
+    assert model.timeouts == [150, 110]
+
+
+def test_exhausted_budget_is_504_without_a_second_call(settings):
+    now = [0.0]
+    model = FakeModel(_slow_bad_reply(now, 200), GOOD_SQL)
+    with make_client(settings, FakeModel()) as client:
+        db_path = str(client.app.state.settings.db_path)
+    with pytest.raises(AskError) as err:
+        answer(BODY["question"], [2], 10, db_path, model, [], 0, 5, model_budget_s=150, clock=lambda: now[0])
+    assert (err.value.status, err.value.reason) == (504, "timeout")
+    assert len(model.calls) == 1
 
 
 def test_model_unavailable_is_502(settings):
