@@ -7,28 +7,44 @@ import contextlib
 import json
 import logging
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
 import duckdb
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt, ValidationError
 
+from app.ask import (
+    SIGNATURE_HEADER,
+    TIMESTAMP_HEADER,
+    AskError,
+    ChatClient,
+    OllamaClient,
+    answer,
+    load_examples,
+    verify_request,
+)
 from app.config import Settings
 from app.db import READER_CONFIG
 from app.export import ExportBusy, ExportError, ExportResult, export
 from app.schema import describe_schema, schema_as_prompt_text
 
 log = logging.getLogger("analytics.api")
+ask_log = logging.getLogger("analytics.ask")
 
 ExportFn = Callable[[Settings], ExportResult]
 
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
-    course_ids: list[int] = Field(min_length=1)
-    user_ref: str = Field(min_length=1, max_length=128)
+    # Course scope of the request. It is covered by the signature and is the only
+    # source of course filtering; user_ref is used for logging only.
+    course_ids: list[StrictInt] = Field(min_length=1, max_length=200)
+    user_ref: str = Field(pattern=r"^[0-9a-fA-F]{8,128}$")
+    max_rows: StrictInt | None = Field(default=None, ge=1)
 
 
 class AskResponse(BaseModel):
@@ -36,6 +52,10 @@ class AskResponse(BaseModel):
     columns: list[str]
     rows: list[list[Any]]
     elapsed_ms: float
+    attempts: int
+    truncated: bool
+    model: str
+    timings: dict[str, Any]
 
 
 class ExportRunner:
@@ -89,10 +109,19 @@ def create_app(
     settings: Settings | None = None,
     export_fn: ExportFn | None = None,
     refresh_on_startup: bool = True,
+    chat_client: ChatClient | None = None,
 ) -> FastAPI:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(name)s %(message)s")
     settings = settings or Settings.from_env()
     runner = ExportRunner(settings, export_fn or export)
+    chat_client = chat_client or OllamaClient(
+        settings.ollama_url,
+        settings.ollama_model,
+        settings.ollama_num_ctx,
+        settings.ollama_keep_alive,
+        settings.ollama_timeout_s,
+    )
+    examples = load_examples()
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -171,10 +200,68 @@ def create_app(
             return JSONResponse(status_code=500, content={"detail": "export failed; see the analytics service logs"})
         return result.to_dict()
 
+    def ask_error(err: AskError) -> JSONResponse:
+        return JSONResponse(status_code=err.status, content={"detail": err.detail()})
+
     @app.post("/ask", response_model=AskResponse)
-    def ask(request: AskRequest):
-        # Phase d: generate SQL with the local model, then run it through
-        # app.db.open_query_connection + run_guarded and return AskResponse.
-        return JSONResponse(status_code=501, content={"detail": "/ask is not implemented yet"})
+    async def ask(request: Request):
+        # The signature covers the exact bytes received, so read them before parsing.
+        raw = await request.body()
+        try:
+            verify_request(
+                settings.askdata_secret,
+                request.headers.get(TIMESTAMP_HEADER),
+                request.headers.get(SIGNATURE_HEADER),
+                raw,
+                settings.replay_window_s,
+            )
+        except AskError as err:
+            ask_log.info("ask rejected outcome=%s", err.reason)
+            return ask_error(err)
+        try:
+            body = AskRequest.model_validate_json(raw)
+        except ValidationError as err:
+            errors = [{"loc": e["loc"], "msg": e["msg"], "type": e["type"]} for e in err.errors()]
+            return JSONResponse(status_code=422, content={"detail": errors})
+        if not settings.db_path.exists():
+            return no_export()
+
+        max_rows = min(settings.max_rows, body.max_rows or settings.max_rows)
+        ask_log.debug("ask user_ref=%s question=%r", body.user_ref, body.question)
+        start = time.perf_counter()
+        attempts, outcome = 0, "ok"
+        try:
+            result = await run_in_threadpool(
+                answer,
+                body.question,
+                body.course_ids,
+                max_rows,
+                str(settings.db_path),
+                chat_client,
+                examples,
+                settings.examples_top_k,
+                settings.query_timeout_s,
+            )
+            attempts = result.attempts
+            return result.to_dict()
+        except AskError as err:
+            attempts, outcome = err.attempts, err.reason
+            return ask_error(err)
+        except Exception as err:  # noqa: BLE001
+            outcome = "internal_error"
+            log.error("ask failed: %s", type(err).__name__)
+            return JSONResponse(
+                status_code=500,
+                content={"detail": {"reason": "internal_error", "message": "see the analytics service logs"}},
+            )
+        finally:
+            ask_log.info(
+                "ask user_ref=%s courses=%d attempts=%d elapsed_ms=%.0f outcome=%s",
+                body.user_ref,
+                len(body.course_ids),
+                attempts,
+                (time.perf_counter() - start) * 1000.0,
+                outcome,
+            )
 
     return app

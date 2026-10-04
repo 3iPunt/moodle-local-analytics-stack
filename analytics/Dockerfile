@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN python -c "import duckdb; duckdb.connect().execute('INSTALL mysql')" \
     && chmod -R a+rX /opt/duck
 
-COPY pytest.ini views.sql ./
+COPY pytest.ini views.sql examples.yaml ./
 COPY app ./app
 COPY tests ./tests
 

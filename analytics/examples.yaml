@@ -1,0 +1,315 @@
+# Few-shot examples for /ask. Each one must pass the SQL guard and return rows on the
+# demo export (tests/test_examples.py). The `id` of the six talk questions is used by
+# the tests and the benchmark; keep it stable.
+
+- id: courses_students
+  question: Which courses do I teach, and how many students are in each?
+  tags: [courses, students, enrolment, count]
+  sql: |
+    SELECT c.shortname, c.fullname, count(DISTINCT p.user_ref) AS students
+    FROM course AS c
+    LEFT JOIN participant AS p ON p.course_id = c.course_id AND p.role = 'student'
+    GROUP BY c.shortname, c.fullname
+    ORDER BY students DESC
+
+- id: courses_teachers_students
+  question: How many teachers and students does each course have?
+  tags: [courses, teachers, students, roles, count]
+  sql: |
+    SELECT c.shortname,
+           count(DISTINCT p.user_ref) FILTER (WHERE p.role = 'student') AS students,
+           count(DISTINCT p.user_ref) FILTER (WHERE p.role IN ('editingteacher', 'teacher')) AS teachers
+    FROM course AS c
+    LEFT JOIN participant AS p ON p.course_id = c.course_id
+    GROUP BY c.shortname
+    ORDER BY c.shortname
+
+- id: not_logged_in_14
+  question: Which students have not logged in for 14 days?
+  tags: [inactive, login, students, list]
+  sql: |
+    SELECT c.shortname, p.user_ref, p.last_login_at, p.days_since_last_login
+    FROM participant AS p
+    JOIN course AS c ON c.course_id = p.course_id
+    WHERE p.role = 'student'
+      AND (p.days_since_last_login > 14 OR p.days_since_last_login IS NULL)
+    ORDER BY c.shortname, p.days_since_last_login DESC NULLS FIRST
+    LIMIT 200
+
+- id: not_logged_in_7_per_course
+  question: How many students in each course have not logged in for 7 days?
+  tags: [inactive, login, students, per course, count, share]
+  sql: |
+    SELECT c.shortname,
+           count(*) AS students,
+           count(*) FILTER (WHERE p.days_since_last_login > 7 OR p.days_since_last_login IS NULL) AS not_logged_in_7_days,
+           round(100.0 * count(*) FILTER (WHERE p.days_since_last_login > 7 OR p.days_since_last_login IS NULL) / count(*), 1) AS share_pct
+    FROM participant AS p
+    JOIN course AS c ON c.course_id = p.course_id
+    WHERE p.role = 'student'
+    GROUP BY c.shortname
+    ORDER BY share_pct DESC
+
+- id: never_logged_in
+  question: Which students have never logged in?
+  tags: [inactive, never, login, students, list]
+  sql: |
+    SELECT c.shortname, p.user_ref, p.enrolled_at
+    FROM participant AS p
+    JOIN course AS c ON c.course_id = p.course_id
+    WHERE p.role = 'student' AND p.last_login_at IS NULL
+    ORDER BY c.shortname, p.user_ref
+    LIMIT 200
+
+- id: not_accessed_course_14
+  question: Which students have not accessed the course in the last 14 days?
+  tags: [inactive, course access, students, list]
+  sql: |
+    SELECT c.shortname, p.user_ref, p.last_access_at, p.days_since_last_access
+    FROM participant AS p
+    JOIN course AS c ON c.course_id = p.course_id
+    WHERE p.role = 'student'
+      AND (p.days_since_last_access > 14 OR p.days_since_last_access IS NULL)
+    ORDER BY c.shortname, p.days_since_last_access DESC NULLS FIRST
+    LIMIT 200
+
+- id: not_submitted_this_week
+  question: Who has not submitted the assignment due this week?
+  tags: [assignment, submission, missing, due, deadline, list]
+  sql: |
+    SELECT c.shortname, a.name AS assignment, a.due_at, p.user_ref
+    FROM activity AS a
+    JOIN course AS c ON c.course_id = a.course_id
+    JOIN participant AS p ON p.course_id = a.course_id AND p.role = 'student'
+    WHERE a.module = 'assign'
+      AND a.due_at >= current_date AND a.due_at < current_date + INTERVAL 7 DAY
+      AND NOT EXISTS (
+          SELECT 1 FROM assignment_submission AS s
+          WHERE s.cm_id = a.cm_id AND s.user_ref = p.user_ref AND s.status = 'submitted' AND s.latest
+      )
+    ORDER BY c.shortname, a.name, p.user_ref
+    LIMIT 200
+
+- id: not_submitted_next_days_per_course
+  question: How many students per course have not submitted the assignments due in the next 10 days?
+  tags: [assignment, submission, missing, due, deadline, per course, count]
+  sql: |
+    SELECT c.shortname, a.name AS assignment, a.due_at,
+           count(*) AS students,
+           count(*) FILTER (WHERE s.user_ref IS NOT NULL) AS submitted,
+           count(*) FILTER (WHERE s.user_ref IS NULL) AS not_submitted
+    FROM activity AS a
+    JOIN course AS c ON c.course_id = a.course_id
+    JOIN participant AS p ON p.course_id = a.course_id AND p.role = 'student'
+    LEFT JOIN assignment_submission AS s
+      ON s.cm_id = a.cm_id AND s.user_ref = p.user_ref AND s.status = 'submitted' AND s.latest
+    WHERE a.module = 'assign'
+      AND a.due_at >= current_date AND a.due_at < current_date + INTERVAL 10 DAY
+    GROUP BY c.shortname, a.name, a.due_at
+    ORDER BY a.due_at, c.shortname
+
+- id: submission_rate_per_assignment
+  question: What share of students submitted each assignment that has a due date?
+  tags: [assignment, submission, rate, share, due]
+  sql: |
+    SELECT c.shortname, a.name AS assignment, a.due_at,
+           count(DISTINCT s.user_ref) AS submitted,
+           round(100.0 * count(DISTINCT s.user_ref) / count(DISTINCT p.user_ref), 1) AS submitted_pct
+    FROM activity AS a
+    JOIN course AS c ON c.course_id = a.course_id
+    JOIN participant AS p ON p.course_id = a.course_id AND p.role = 'student'
+    LEFT JOIN assignment_submission AS s
+      ON s.cm_id = a.cm_id AND s.user_ref = p.user_ref AND s.status = 'submitted' AND s.latest
+    WHERE a.module = 'assign' AND a.due_at IS NOT NULL
+    GROUP BY c.shortname, a.name, a.due_at
+    ORDER BY c.shortname, a.due_at
+
+- id: average_grade_per_item
+  question: What is the average grade for each graded item in my course?
+  tags: [grades, average, graded item, activity, gradebook]
+  sql: |
+    SELECT c.shortname, gi.item_name, count(g.final_grade) AS graded_students,
+           round(avg(g.final_grade), 1) AS average_grade, gi.grade_max
+    FROM grade_item AS gi
+    JOIN course AS c ON c.course_id = gi.course_id
+    JOIN grade AS g ON g.grade_item_id = gi.grade_item_id
+    WHERE gi.item_type = 'mod'
+    GROUP BY c.shortname, gi.item_name, gi.grade_max
+    ORDER BY c.shortname, gi.item_name
+
+- id: lowest_average_grade_pct
+  question: Which graded activity has the lowest average grade as a percentage?
+  tags: [grades, average, percentage, lowest, activity]
+  sql: |
+    SELECT c.shortname, gi.item_name,
+           round(100.0 * avg(g.final_grade / gi.grade_max), 1) AS average_pct,
+           count(*) AS graded_students
+    FROM grade AS g
+    JOIN grade_item AS gi ON gi.grade_item_id = g.grade_item_id
+    JOIN course AS c ON c.course_id = gi.course_id
+    WHERE gi.item_type = 'mod' AND gi.grade_max > 0
+    GROUP BY c.shortname, gi.item_name
+    ORDER BY average_pct
+    LIMIT 10
+
+- id: drop_off
+  question: Which activity has the highest drop-off?
+  tags: [drop-off, completion, activity, path, step, lose students]
+  sql: |
+    WITH students AS (
+        SELECT course_id, count(DISTINCT user_ref) AS n
+        FROM participant WHERE role = 'student' GROUP BY course_id
+    ), rates AS (
+        SELECT a.course_id, a.section, a.cm_id, a.name,
+               round(100.0 * count(DISTINCT cp.user_ref) FILTER (WHERE cp.completed) / s.n, 1) AS completion_pct
+        FROM activity AS a
+        JOIN students AS s ON s.course_id = a.course_id
+        LEFT JOIN completion AS cp ON cp.cm_id = a.cm_id
+        WHERE a.completion_tracked
+        GROUP BY a.course_id, a.section, a.cm_id, a.name, s.n
+    ), steps AS (
+        SELECT *,
+               lag(name) OVER (PARTITION BY course_id ORDER BY section, cm_id) AS previous_activity,
+               lag(completion_pct) OVER (PARTITION BY course_id ORDER BY section, cm_id) AS previous_pct
+        FROM rates
+    )
+    SELECT c.shortname, st.name AS activity, st.previous_activity,
+           st.previous_pct, st.completion_pct, round(st.previous_pct - st.completion_pct, 1) AS drop_pct
+    FROM steps AS st
+    JOIN course AS c ON c.course_id = st.course_id
+    WHERE st.previous_pct IS NOT NULL
+    ORDER BY drop_pct DESC
+    LIMIT 10
+
+- id: completion_per_activity
+  question: What is the completion rate of each activity in my course?
+  tags: [completion, rate, activity, path, per activity]
+  sql: |
+    WITH students AS (
+        SELECT course_id, count(DISTINCT user_ref) AS n
+        FROM participant WHERE role = 'student' GROUP BY course_id
+    )
+    SELECT c.shortname, a.section, a.name AS activity,
+           count(DISTINCT cp.user_ref) FILTER (WHERE cp.completed) AS completed,
+           round(100.0 * count(DISTINCT cp.user_ref) FILTER (WHERE cp.completed) / s.n, 1) AS completion_pct
+    FROM activity AS a
+    JOIN course AS c ON c.course_id = a.course_id
+    JOIN students AS s ON s.course_id = a.course_id
+    LEFT JOIN completion AS cp ON cp.cm_id = a.cm_id
+    WHERE a.completion_tracked
+    GROUP BY c.shortname, a.section, a.cm_id, a.name, s.n
+    ORDER BY c.shortname, a.section, a.cm_id
+
+- id: completed_previous_not_next
+  question: Which students completed Problem Set 1 but never opened the next activity?
+  tags: [drop-off, completion, students, list, stopped]
+  sql: |
+    WITH path AS (
+        SELECT course_id, cm_id, name,
+               lead(cm_id) OVER (PARTITION BY course_id ORDER BY section, cm_id) AS next_cm_id
+        FROM activity WHERE completion_tracked
+    )
+    SELECT c.shortname, p.user_ref
+    FROM path
+    JOIN course AS c ON c.course_id = path.course_id
+    JOIN completion AS done ON done.cm_id = path.cm_id AND done.completed
+    JOIN participant AS p ON p.course_id = done.course_id AND p.user_ref = done.user_ref AND p.role = 'student'
+    WHERE path.name = 'Problem Set 1'
+      AND NOT EXISTS (
+          SELECT 1 FROM completion AS nx
+          WHERE nx.cm_id = path.next_cm_id AND nx.user_ref = done.user_ref AND nx.completed
+      )
+    ORDER BY c.shortname, p.user_ref
+    LIMIT 200
+
+- id: compare_completion
+  question: Compare completion across my courses and explain the differences
+  tags: [completion, compare, courses, explain, inactive, drop-off, grades]
+  sql: |
+    WITH students AS (
+        SELECT course_id, count(DISTINCT user_ref) AS students,
+               count(DISTINCT user_ref) FILTER (WHERE days_since_last_login > 14 OR days_since_last_login IS NULL) AS inactive
+        FROM participant WHERE role = 'student' GROUP BY course_id
+    ), finished AS (
+        SELECT course_id, count(*) FILTER (WHERE completed) AS completed
+        FROM course_completion GROUP BY course_id
+    ), rates AS (
+        SELECT a.course_id, a.section, a.cm_id,
+               100.0 * count(DISTINCT cp.user_ref) FILTER (WHERE cp.completed) / s.students AS pct
+        FROM activity AS a
+        JOIN students AS s ON s.course_id = a.course_id
+        LEFT JOIN completion AS cp ON cp.cm_id = a.cm_id
+        WHERE a.completion_tracked
+        GROUP BY a.course_id, a.section, a.cm_id, s.students
+    ), drops AS (
+        SELECT course_id, max(prev - pct) AS biggest_drop_pct
+        FROM (SELECT course_id, pct, lag(pct) OVER (PARTITION BY course_id ORDER BY section, cm_id) AS prev FROM rates)
+        GROUP BY course_id
+    ), grades AS (
+        SELECT g.course_id, avg(100.0 * g.final_grade / gi.grade_max) AS avg_grade_pct
+        FROM grade AS g JOIN grade_item AS gi ON gi.grade_item_id = g.grade_item_id
+        WHERE gi.item_type = 'mod' AND gi.grade_max > 0
+        GROUP BY g.course_id
+    )
+    SELECT c.shortname, s.students, coalesce(f.completed, 0) AS completed,
+           round(100.0 * coalesce(f.completed, 0) / s.students, 1) AS completion_pct,
+           round(100.0 * s.inactive / s.students, 1) AS inactive_14d_pct,
+           round(d.biggest_drop_pct, 1) AS biggest_step_drop_pct,
+           round(gr.avg_grade_pct, 1) AS avg_grade_pct
+    FROM course AS c
+    JOIN students AS s ON s.course_id = c.course_id
+    LEFT JOIN finished AS f ON f.course_id = c.course_id
+    LEFT JOIN drops AS d ON d.course_id = c.course_id
+    LEFT JOIN grades AS gr ON gr.course_id = c.course_id
+    ORDER BY completion_pct DESC
+
+- id: course_completion_rate
+  question: What is the course completion rate in each course?
+  tags: [completion, course, rate, finished]
+  sql: |
+    SELECT c.shortname,
+           count(DISTINCT p.user_ref) AS students,
+           count(DISTINCT cc.user_ref) FILTER (WHERE cc.completed) AS completed,
+           round(100.0 * count(DISTINCT cc.user_ref) FILTER (WHERE cc.completed) / count(DISTINCT p.user_ref), 1) AS completion_pct
+    FROM course AS c
+    JOIN participant AS p ON p.course_id = c.course_id AND p.role = 'student'
+    LEFT JOIN course_completion AS cc ON cc.course_id = p.course_id AND cc.user_ref = p.user_ref
+    GROUP BY c.shortname
+    ORDER BY completion_pct DESC
+
+- id: daily_active_students
+  question: How many students were active each day in the last 14 days?
+  tags: [activity, daily, trend, active, students, days]
+  sql: |
+    SELECT d.day, count(DISTINCT d.user_ref) AS active_students, sum(d.events) AS events
+    FROM daily_activity AS d
+    JOIN participant AS p ON p.course_id = d.course_id AND p.user_ref = d.user_ref AND p.role = 'student'
+    WHERE d.day >= current_date - INTERVAL 14 DAY
+    GROUP BY d.day
+    ORDER BY d.day
+
+- id: weekly_activity_per_course
+  question: Show the weekly activity trend per course over the last 8 weeks
+  tags: [activity, weekly, trend, per course, events, weeks]
+  sql: |
+    SELECT c.shortname, date_trunc('week', d.day) AS week,
+           count(DISTINCT d.user_ref) AS active_students, sum(d.events) AS events
+    FROM daily_activity AS d
+    JOIN course AS c ON c.course_id = d.course_id
+    JOIN participant AS p ON p.course_id = d.course_id AND p.user_ref = d.user_ref AND p.role = 'student'
+    WHERE d.day >= current_date - INTERVAL 56 DAY
+    GROUP BY c.shortname, week
+    ORDER BY c.shortname, week
+
+- id: most_active_students
+  question: Which students were most active in the last 7 days?
+  tags: [activity, active, students, top, events, recent]
+  sql: |
+    SELECT c.shortname, d.user_ref, sum(d.events) AS events, count(*) AS active_days
+    FROM daily_activity AS d
+    JOIN course AS c ON c.course_id = d.course_id
+    JOIN participant AS p ON p.course_id = d.course_id AND p.user_ref = d.user_ref AND p.role = 'student'
+    WHERE d.day >= current_date - INTERVAL 7 DAY
+    GROUP BY c.shortname, d.user_ref
+    ORDER BY events DESC
+    LIMIT 20

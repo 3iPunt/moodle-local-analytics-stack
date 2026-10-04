@@ -89,9 +89,3 @@ def test_refresh_failure_is_500_without_details(settings):
         assert r.status_code == 500
         assert "pw" not in r.text
 
-
-def test_ask_is_not_implemented_yet(settings):
-    with TestClient(create_app(settings, export_fn=fake_export, refresh_on_startup=False)) as client:
-        r = client.post("/ask", json={"question": "How many students?", "course_ids": [2], "user_ref": "abc"})
-        assert r.status_code == 501
-        assert client.post("/ask", json={"question": "x"}).status_code == 422

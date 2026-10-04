@@ -38,6 +38,15 @@ class Settings:
     export_format: str = "duckdb"
     refresh_minutes: int = 15
     max_rows: int = 200
+    askdata_secret: str = field(default="", repr=False)
+    replay_window_s: int = 300
+    ollama_url: str = "http://ollama:11434"
+    ollama_model: str = "qwen2.5-coder:14b"
+    ollama_num_ctx: int = 8192
+    ollama_keep_alive: str = "30m"
+    ollama_timeout_s: int = 180
+    examples_top_k: int = 6
+    query_timeout_s: int = 30
 
     @property
     def db_path(self) -> Path:
@@ -68,5 +77,14 @@ class Settings:
             export_format=export_format,
             refresh_minutes=_int(env, "REFRESH_MINUTES", 15, 0),
             max_rows=_int(env, "MAX_ROWS", 200, 1),
+            askdata_secret=env.get("ASKDATA_SHARED_SECRET", ""),
+            replay_window_s=_int(env, "ASKDATA_REPLAY_WINDOW_S", 300, 1),
+            ollama_url=(env.get("OLLAMA_URL", "") or "http://ollama:11434").rstrip("/"),
+            ollama_model=env.get("OLLAMA_MODEL", "") or "qwen2.5-coder:14b",
+            ollama_num_ctx=_int(env, "OLLAMA_NUM_CTX", 8192, 512),
+            ollama_keep_alive=env.get("OLLAMA_KEEP_ALIVE", "") or "30m",
+            ollama_timeout_s=_int(env, "OLLAMA_TIMEOUT_S", 180, 1),
+            examples_top_k=_int(env, "EXAMPLES_TOP_K", 6, 0),
+            query_timeout_s=_int(env, "QUERY_TIMEOUT_S", 30, 1),
             **values,
         )
