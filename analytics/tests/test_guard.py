@@ -178,6 +178,19 @@ def test_parse_error_includes_parser_message():
 
 
 @pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT " + "(" * 200 + "1" + ")" * 200 + " FROM course",
+        "SELECT * FROM " + "(SELECT * FROM " * 300 + "course" + ") AS t" * 300,
+    ],
+)
+def test_deeply_nested_sql_is_a_parse_error(sql):
+    err = rejected(sql)
+    assert err.reason == "parse_error"
+    assert "((((" not in str(err)
+
+
+@pytest.mark.parametrize(
     "text, expected",
     [
         ("Here you go:\n```sql\nSELECT 1\n```\nthanks", "SELECT 1"),

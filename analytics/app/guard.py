@@ -18,7 +18,7 @@ import re
 
 import sqlglot
 from sqlglot import exp
-from sqlglot.errors import ParseError, TokenError
+from sqlglot.errors import ParseError, SqlglotError, TokenError
 from sqlglot.tokens import TokenType
 
 logging.getLogger("sqlglot").setLevel(logging.ERROR)
@@ -244,22 +244,26 @@ def validate_sql(sql: str, allowed_tables: set[str], max_rows: int) -> str:
     if not text:
         raise GuardError("empty", "the query is empty; send one SELECT statement")
 
-    statement = _parse_single(text)
+    try:
+        statement = _parse_single(text)
 
-    if not isinstance(statement, ALLOWED_ROOTS) or isinstance(statement, FORBIDDEN_NODES):
-        kind = statement.key.upper()
-        raise GuardError("not_select", f"only SELECT queries are allowed, got {kind}")
+        if not isinstance(statement, ALLOWED_ROOTS) or isinstance(statement, FORBIDDEN_NODES):
+            kind = statement.key.upper()
+            raise GuardError("not_select", f"only SELECT queries are allowed, got {kind}")
 
-    for node in statement.walk():
-        if isinstance(node, FORBIDDEN_NODES):
-            raise GuardError("not_select", f"only SELECT queries are allowed, found {node.key.upper()}")
-        if isinstance(node, exp.Select) and node.args.get("into") is not None:
-            raise GuardError("select_into", "SELECT ... INTO is not allowed; return the rows instead")
-        if isinstance(node, exp.Table):
-            _check_table(node, allowed, allowed_list)
-        elif isinstance(node, exp.Func) and _is_denied(_func_names(node)):
-            name = sorted(_func_names(node))[0]
-            raise GuardError("forbidden_function", f"function '{name}' is not allowed")
+        for node in statement.walk():
+            if isinstance(node, FORBIDDEN_NODES):
+                raise GuardError("not_select", f"only SELECT queries are allowed, found {node.key.upper()}")
+            if isinstance(node, exp.Select) and node.args.get("into") is not None:
+                raise GuardError("select_into", "SELECT ... INTO is not allowed; return the rows instead")
+            if isinstance(node, exp.Table):
+                _check_table(node, allowed, allowed_list)
+            elif isinstance(node, exp.Func) and _is_denied(_func_names(node)):
+                name = sorted(_func_names(node))[0]
+                raise GuardError("forbidden_function", f"function '{name}' is not allowed")
 
-    inner = statement.sql(dialect=DIALECT)
+        inner = statement.sql(dialect=DIALECT)
+    except (RecursionError, SqlglotError) as err:
+        raise GuardError("parse_error", "the query is too complex or nested to analyse") from err
+
     return f"SELECT * FROM ({inner}) AS q LIMIT {max_rows}"
