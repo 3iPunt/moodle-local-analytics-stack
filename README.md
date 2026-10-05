@@ -93,7 +93,7 @@ Pinned versions: Moodle `v5.3.0`, `moodlehq/moodle-php-apache:8.3-bookworm` (by 
 ### Steps
 
 ```bash
-git clone <repository-url> moodle-local-stack
+git clone https://github.com/3iPunt/moodle-local-analytics-stack.git moodle-local-stack
 cd moodle-local-stack
 make env
 ```

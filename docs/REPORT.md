@@ -25,7 +25,7 @@ Development machine: Apple M1 Pro, 32 GB host RAM, Docker Desktop VM limited to 
 ## Commands from a clean machine
 
 ```bash
-git clone <repository-url> moodle-local-stack
+git clone https://github.com/3iPunt/moodle-local-analytics-stack.git moodle-local-stack
 cd moodle-local-stack
 make env
 # edit OLLAMA_MODEL in .env now if the machine has less than about 9 GB for the model
