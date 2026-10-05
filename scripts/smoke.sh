@@ -201,15 +201,16 @@ SECRET = os.environ["ASKDATA_SHARED_SECRET"]
 QUESTION = sys.argv[1]
 
 
-def sign(ts, body):
-    return hmac.new(SECRET.encode(), str(ts).encode() + b"\n" + body, hashlib.sha256).hexdigest()
+def sign(method, path, ts, body):
+    message = f"{method}\n{path}\n{ts}\n".encode() + body
+    return hmac.new(SECRET.encode(), message, hashlib.sha256).hexdigest()
 
 
 def call(method, path, body=b"", ts=None, signature=None, timeout=300, headers=None):
     headers = {"Content-Type": "application/json", **(headers or {})}
     if ts is not None:
         headers["X-Askdata-Timestamp"] = str(ts)
-        headers["X-Askdata-Signature"] = signature if signature is not None else sign(ts, body)
+        headers["X-Askdata-Signature"] = signature if signature is not None else sign(method, path, ts, body)
     req = urllib.request.Request(BASE + path, data=body if method == "POST" else None, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -254,6 +255,11 @@ print(("PASS" if ok else "FAIL") + f" /ask with a body over 64 KiB -> {status} {
 status, payload = call("POST", "/ask", ask_body("hello"), ts="\u00b2", signature="0" * 64)
 ok = status == 401 and reason(payload) == "bad_signature"
 print(("PASS" if ok else "FAIL") + f" /ask with a non-ASCII digit timestamp -> {status} {reason(payload)}")
+
+now = int(time.time())
+status, payload = call("POST", "/refresh", ts=now, signature=sign("GET", "/health", now, b""))
+ok = status == 401 and reason(payload) == "bad_signature"
+print(("PASS" if ok else "FAIL") + f" GET /health signature replayed on POST /refresh -> {status} {reason(payload)}")
 
 status, payload = call("POST", "/refresh")
 print(("PASS" if status == 401 else "FAIL") + f" /refresh without signature -> {status} {reason(payload)}")
@@ -437,6 +443,13 @@ if [ "$(moodle_login "$JAR_S" "$STUDENT_USER" "$STUDENT_PASSWORD")" = ok ]; then
   fi
 else
   fail "student $STUDENT_USER could not log in"
+fi
+
+ros=$(dexec moodle runuser -u www-data -- php -r 'define("CLI_SCRIPT", 1); require "/var/www/html/config.php"; echo empty($CFG->enable_read_only_sessions) ? "off" : "on";' 2>/dev/null || true)
+if [ "$ros" = on ]; then
+  pass "read-only sessions enabled (\$CFG->enable_read_only_sessions)"
+else
+  fail "\$CFG->enable_read_only_sessions is not set; the plugin's readonlysession needs it"
 fi
 
 # ---------------------------------------------------------------------------------------

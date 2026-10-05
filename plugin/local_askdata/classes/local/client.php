@@ -135,13 +135,15 @@ class client {
             'max_rows' => $this->maxrows,
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
 
+        $url = rtrim($this->serviceurl, '/') . '/ask';
+        $path = (string) parse_url($url, PHP_URL_PATH);
+
         $headers = [
             'Content-Type: application/json',
             'Accept: application/json',
             'X-Askdata-Timestamp: ' . $timestamp,
-            'X-Askdata-Signature: ' . signer::sign($this->secret, $timestamp, $body),
+            'X-Askdata-Signature: ' . signer::sign($this->secret, 'POST', $path, $timestamp, $body),
         ];
-        $url = rtrim($this->serviceurl, '/') . '/ask';
 
         $start = microtime(true);
         [$status, $raw, $errno] = $this->send($url, $headers, $body);

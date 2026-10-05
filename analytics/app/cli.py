@@ -45,7 +45,7 @@ def post_ask(question: str, course_ids: list[int], max_rows: int | None = None, 
         os.environ.get("ASK_URL", API_URL),
         data=body,
         method="POST",
-        headers={"Content-Type": "application/json", TIMESTAMP_HEADER: ts, SIGNATURE_HEADER: sign(secret, ts, body)},
+        headers={"Content-Type": "application/json", TIMESTAMP_HEADER: ts, SIGNATURE_HEADER: sign(secret, "POST", "/ask", ts, body)},
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:

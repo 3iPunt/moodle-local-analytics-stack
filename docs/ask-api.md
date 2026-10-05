@@ -9,19 +9,21 @@ Every request is signed with the shared secret `ASKDATA_SHARED_SECRET`.
 | Header | Value |
 |---|---|
 | `X-Askdata-Timestamp` | Unix time in seconds, 1 to 12 ASCII digits |
-| `X-Askdata-Signature` | Hex of `HMAC-SHA256(secret, timestamp + "\n" + body)`, 64 characters (case is ignored) |
+| `X-Askdata-Signature` | Hex of `HMAC-SHA256(secret, METHOD + "\n" + PATH + "\n" + timestamp + "\n" + body)`, 64 characters (case is ignored) |
 
 A header in any other format (a sign, a decimal point, a non-ASCII digit such as `²`, a non-hex character) gets 401 `bad_signature` before any comparison.
+
+`METHOD` is the upper-case HTTP method and `PATH` is the request path without the query string (for example `POST` and `/ask`). The service uses the path it received, so a client behind a prefix signs the prefixed path. A signature is valid only for the endpoint it was made for: one captured from `GET /health` does not work on `POST /refresh`. A signature in the old `timestamp + "\n" + body` form gets 401 `bad_signature`.
 
 `body` is the exact byte string sent as the request body. The service checks the signature over the raw bytes before it parses the JSON, so the client must sign the same bytes it sends. PHP:
 
 ```php
 $body = json_encode($payload);
 $ts = (string) time();
-$sig = hash_hmac('sha256', $ts . "\n" . $body, $secret);
+$sig = hash_hmac('sha256', "POST\n/ask\n" . $ts . "\n" . $body, $secret);
 ```
 
-Requests older or newer than `ASKDATA_REPLAY_WINDOW_S` (default 300 s) are rejected. There is no nonce, so a captured request can be replayed inside that window (see [security.md](security.md#known-limits)). When `ASKDATA_SHARED_SECRET` is empty the endpoint answers 503 to everything.
+Requests older or newer than `ASKDATA_REPLAY_WINDOW_S` (default 300 s) are rejected. There is no nonce, so a captured request can be replayed on the same endpoint inside that window (replay on a different endpoint or method is rejected) (see [security.md](security.md#known-limits)). When `ASKDATA_SHARED_SECRET` is empty the endpoint answers 503 to everything.
 
 Bodies larger than 64 KiB get 413 `too_large`. The service checks `Content-Length` before it reads anything, and stops reading a chunked body as soon as it passes the limit. A valid `/ask` body is a few KiB.
 

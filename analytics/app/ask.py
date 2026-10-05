@@ -117,14 +117,16 @@ class AskError(Exception):
 # --- authentication -------------------------------------------------------------------
 
 
-def sign(secret: str, timestamp: str | int, body: bytes) -> str:
-    """Hex HMAC-SHA256 of ``f"{timestamp}\\n"`` followed by the raw body bytes."""
-    message = str(timestamp).encode() + b"\n" + body
+def sign(secret: str, method: str, path: str, timestamp: str | int, body: bytes) -> str:
+    """Hex HMAC-SHA256 of ``METHOD\\nPATH\\nTIMESTAMP\\n`` followed by the raw body bytes."""
+    message = f"{method.upper()}\n{path}\n{timestamp}\n".encode() + body
     return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
 
 
 def verify_request(
     secret: str,
+    method: str,
+    path: str,
     timestamp: str | None,
     signature: str | None,
     body: bytes,
@@ -143,9 +145,9 @@ def verify_request(
     now = time.time() if now is None else now
     if abs(now - int(timestamp)) > window_s:
         raise AskError(401, "expired", f"timestamp is outside the {window_s}s window; check the clocks")
-    expected = sign(secret, timestamp, body)
+    expected = sign(secret, method, path, timestamp, body)
     if not hmac.compare_digest(expected, signature):
-        raise AskError(401, "bad_signature", "signature does not match the request body")
+        raise AskError(401, "bad_signature", "signature does not match the request")
 
 
 # --- few-shot examples ----------------------------------------------------------------

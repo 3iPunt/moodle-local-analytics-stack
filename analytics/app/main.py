@@ -211,6 +211,8 @@ def create_app(
             body = await read_body(request)
         verify_request(
             settings.askdata_secret,
+            request.method,
+            request.url.path,
             request.headers.get(TIMESTAMP_HEADER),
             request.headers.get(SIGNATURE_HEADER),
             body,

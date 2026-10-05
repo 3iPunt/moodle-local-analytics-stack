@@ -25,17 +25,19 @@ namespace local_askdata\local;
  */
 class signer {
     /**
-     * Signs a request body.
+     * Signs a request.
      *
-     * The signed message is the timestamp, a newline, and the raw body.
+     * The signed message is METHOD, PATH and TIMESTAMP, each followed by a newline, then the raw body.
      *
      * @param string $secret The shared secret.
+     * @param string $method The HTTP method, upper-cased before signing.
+     * @param string $path The request path without query string, as the service sees it.
      * @param int $timestamp Unix timestamp in seconds, sent in the X-Askdata-Timestamp header.
      * @param string $body The raw JSON body exactly as sent.
      * @return string Lowercase hex HMAC-SHA256.
      */
-    public static function sign(string $secret, int $timestamp, string $body): string {
-        return hash_hmac('sha256', $timestamp . "\n" . $body, $secret);
+    public static function sign(string $secret, string $method, string $path, int $timestamp, string $body): string {
+        return hash_hmac('sha256', strtoupper($method) . "\n" . $path . "\n" . $timestamp . "\n" . $body, $secret);
     }
 
     /**

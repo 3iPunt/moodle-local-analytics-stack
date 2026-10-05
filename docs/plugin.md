@@ -12,13 +12,15 @@ On every start the moodle entrypoint:
 2. runs `admin/cli/upgrade.php --non-interactive`, which installs or upgrades the plugin when `version.php` changed and prints "No upgrade needed" otherwise;
 3. runs `scripts/moodle/configure-askdata.sh`, which sets `local_askdata/serviceurl`, `local_askdata/sharedsecret`, `curlsecurityallowedport` and `curlsecurityblockedhosts`. It only purges caches when a value changed. If it fails (for example an empty `ASKDATA_SHARED_SECRET`) Moodle still starts and the log shows a warning.
 
+The entrypoint also writes `$CFG->enable_read_only_sessions = true` to `config.php` (regenerated on every start, but baked into the image, so rebuild with `docker compose build moodle` after changing it). The plugin declares `readonlysession` on `local_askdata_ask` so a slow answer does not hold the session lock, and Moodle ignores that flag unless this setting is on. Moodle refuses sessions that hold session-mode caches while the flag is on, so the entrypoint also maps the session-mode default store to `default_application` (file store) with `core_cache\config_writer`. The step is idempotent and persists in `moodledata/muc/config.php`. `make smoke` fails when the flag is missing.
+
 `make configure-plugin` runs the same script on demand, and `docker compose exec -T moodle bash /opt/stack/scripts/configure-askdata.sh --dry-run` only prints the values. The values come from `.env`: `ASKDATA_SHARED_SECRET`, `ANALYTICS_URL` and `BACKEND_SUBNET`.
 
 ## Security model
 
 - Only users with `local/askdata:ask` in the course see the link and can call `local_askdata_ask` (editing teachers and managers by default). Students get `nopermissions` on the page and on the AJAX call.
 - The question is scoped to the courses where the user holds the capability, minus courses with a suspended or expired enrolment and hidden courses the user cannot see. Category managers without an enrolment keep their courses.
-- Moodle signs each request with HMAC-SHA256 over `timestamp + "\n" + body` (`X-Askdata-Timestamp`, `X-Askdata-Signature`). The secret and service URL never reach the browser. The user is sent as an HMAC of the user id.
+- Moodle signs each request with HMAC-SHA256 over `METHOD + "\n" + PATH + "\n" + timestamp + "\n" + body` (`X-Askdata-Timestamp`, `X-Askdata-Signature`). The secret and service URL never reach the browser. The user is sent as an HMAC of the user id.
 - Moodle's curl security stays on. The script unblocks only `BACKEND_SUBNET` (the rest of `172.16.0.0/12` and the other private ranges stay blocked) and adds port 8000.
 - Every question that passes the capability check is logged as `\local_askdata\event\question_asked`, including failed ones. The full question text is stored in `logstore_standard_log`.
 

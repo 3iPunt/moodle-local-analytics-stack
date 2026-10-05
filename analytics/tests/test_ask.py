@@ -67,7 +67,7 @@ def signed(body, secret=SECRET, ts=None):
     headers = {
         "Content-Type": "application/json",
         "X-Askdata-Timestamp": ts,
-        "X-Askdata-Signature": sign(secret, ts, raw),
+        "X-Askdata-Signature": sign(secret, "POST", "/ask", ts, raw),
     }
     return raw, headers
 
@@ -110,7 +110,7 @@ def test_course_scope_comes_from_signed_course_ids(settings):
         (lambda h, raw: h.pop("X-Askdata-Signature"), "missing_auth"),
         (lambda h, raw: h.pop("X-Askdata-Timestamp"), "missing_auth"),
         (lambda h, raw: h.update({"X-Askdata-Signature": "0" * 64}), "bad_signature"),
-        (lambda h, raw: h.update({"X-Askdata-Signature": sign("other", h["X-Askdata-Timestamp"], raw)}), "bad_signature"),
+        (lambda h, raw: h.update({"X-Askdata-Signature": sign("other", "POST", "/ask", h["X-Askdata-Timestamp"], raw)}), "bad_signature"),
         (lambda h, raw: h.update({"X-Askdata-Timestamp": "12x"}), "bad_signature"),
     ],
 )
@@ -141,13 +141,13 @@ def test_bad_auth_is_401(settings, mutate, reason):
 )
 def test_malformed_auth_headers_are_bad_signature(timestamp, signature):
     with pytest.raises(AskError) as err:
-        verify_request(SECRET, timestamp, signature, b"{}", 300, now=1700000000)
+        verify_request(SECRET, "POST", "/ask", timestamp, signature, b"{}", 300, now=1700000000)
     assert (err.value.status, err.value.reason) == (401, "bad_signature")
 
 
 def test_signature_header_is_case_insensitive_hex():
     ts = "1700000000"
-    verify_request(SECRET, ts, sign(SECRET, ts, b"{}").upper(), b"{}", 300, now=1700000000)
+    verify_request(SECRET, "POST", "/ask", ts, sign(SECRET, "POST", "/ask", ts, b"{}").upper(), b"{}", 300, now=1700000000)
 
 
 @pytest.mark.parametrize(

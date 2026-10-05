@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import threading
 import time
 
@@ -20,17 +22,17 @@ ENV = {
 }
 
 
-def auth_headers(secret=API_SECRET, body=b""):
+def auth_headers(method, path, secret=API_SECRET, body=b""):
     ts = str(int(time.time()))
-    return {"X-Askdata-Timestamp": ts, "X-Askdata-Signature": sign(secret, ts, body)}
+    return {"X-Askdata-Timestamp": ts, "X-Askdata-Signature": sign(secret, method, path, ts, body)}
 
 
 def refresh(client, secret=API_SECRET, body=b""):
-    return client.post("/refresh", content=body, headers=auth_headers(secret, body))
+    return client.post("/refresh", content=body, headers=auth_headers("POST", "/refresh", secret, body))
 
 
 def signed_get(client, path, secret=API_SECRET, **kw):
-    return client.get(path, headers=auth_headers(secret), **kw)
+    return client.get(path, headers=auth_headers("GET", path, secret), **kw)
 
 
 def fake_export(settings):
@@ -181,7 +183,7 @@ def test_refresh_rejects_an_oversized_body_before_reading_it(settings):
     calls = []
     with TestClient(create_app(settings, export_fn=lambda s: calls.append(1), refresh_on_startup=False)) as client:
         body = b"x" * (64 * 1024 + 1)
-        r = client.post("/refresh", content=body, headers=auth_headers(body=body))
+        r = client.post("/refresh", content=body, headers=auth_headers("POST", "/refresh", body=body))
     assert r.status_code == 413
     assert r.json()["detail"]["reason"] == "too_large"
     assert calls == []
@@ -196,3 +198,32 @@ def test_refresh_failure_is_500_without_details(settings):
         assert r.status_code == 500
         assert "pw" not in r.text
 
+
+
+def test_signature_for_one_endpoint_does_not_replay_on_another(settings):
+    with TestClient(create_app(settings, export_fn=fake_export, refresh_on_startup=False)) as client:
+        refresh(client)
+        health_headers = auth_headers("GET", "/health")
+        r = client.post("/refresh", headers=health_headers)
+        assert r.status_code == 401 and r.json()["detail"]["reason"] == "bad_signature"
+        r = client.get("/schema", headers=health_headers)
+        assert r.status_code == 401 and r.json()["detail"]["reason"] == "bad_signature"
+        assert client.get("/health", headers=health_headers).status_code == 200
+        assert client.get("/schema", headers=auth_headers("GET", "/schema")).status_code == 200
+        assert client.post("/refresh", headers=auth_headers("POST", "/refresh")).status_code == 200
+
+
+def test_method_is_part_of_the_signed_message(settings):
+    with TestClient(create_app(settings, export_fn=fake_export, refresh_on_startup=False)) as client:
+        r = client.post("/refresh", headers=auth_headers("GET", "/refresh"))
+        assert r.status_code == 401 and r.json()["detail"]["reason"] == "bad_signature"
+
+
+def test_legacy_timestamp_and_body_signature_is_rejected(settings):
+    ts = str(int(time.time()))
+    legacy = hmac.new(API_SECRET.encode(), ts.encode() + b"\n", hashlib.sha256).hexdigest()
+    headers = {"X-Askdata-Timestamp": ts, "X-Askdata-Signature": legacy}
+    with TestClient(create_app(settings, export_fn=fake_export, refresh_on_startup=False)) as client:
+        r = client.post("/refresh", headers=headers)
+        assert r.status_code == 401 and r.json()["detail"]["reason"] == "bad_signature"
+        assert client.get("/health", headers=headers).status_code == 401

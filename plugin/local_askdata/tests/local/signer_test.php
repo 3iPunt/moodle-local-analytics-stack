@@ -26,13 +26,13 @@ namespace local_askdata\local;
 #[\PHPUnit\Framework\Attributes\CoversClass(signer::class)]
 final class signer_test extends \basic_testcase {
     /**
-     * The signature matches a vector computed independently with Python's hmac module.
+     * The signature matches a vector computed with the analytics service's app.ask.sign.
      */
     public function test_sign_known_vector(): void {
         $body = '{"question":"How many students?","course_ids":[2,3]}';
         $this->assertSame(
-            'cf0c708107778c89865ab59401589d49ce3d1efcb6ca0e5b87cbf3663a140a14',
-            signer::sign('test-secret', 1700000000, $body)
+            'da24559b2768e9929f3f8c0bbdb1adf216333c9fd83e9a1432f5a88222133571',
+            signer::sign('test-secret', 'POST', '/ask', 1700000000, $body)
         );
     }
 
@@ -40,10 +40,19 @@ final class signer_test extends \basic_testcase {
      * The signature changes when any signed part changes.
      */
     public function test_sign_depends_on_all_inputs(): void {
-        $base = signer::sign('s', 1700000000, '{}');
-        $this->assertNotSame($base, signer::sign('t', 1700000000, '{}'));
-        $this->assertNotSame($base, signer::sign('s', 1700000001, '{}'));
-        $this->assertNotSame($base, signer::sign('s', 1700000000, '{ }'));
+        $base = signer::sign('s', 'POST', '/ask', 1700000000, '{}');
+        $this->assertNotSame($base, signer::sign('t', 'POST', '/ask', 1700000000, '{}'));
+        $this->assertNotSame($base, signer::sign('s', 'GET', '/ask', 1700000000, '{}'));
+        $this->assertNotSame($base, signer::sign('s', 'POST', '/health', 1700000000, '{}'));
+        $this->assertNotSame($base, signer::sign('s', 'POST', '/ask', 1700000001, '{}'));
+        $this->assertNotSame($base, signer::sign('s', 'POST', '/ask', 1700000000, '{ }'));
+    }
+
+    /**
+     * The method is upper-cased before signing.
+     */
+    public function test_sign_uppercases_the_method(): void {
+        $this->assertSame(signer::sign('s', 'POST', '/ask', 1, '{}'), signer::sign('s', 'post', '/ask', 1, '{}'));
     }
 
     /**

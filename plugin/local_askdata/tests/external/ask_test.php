@@ -130,7 +130,7 @@ final class ask_test extends \advanced_testcase {
         $this->assertSame('application/json', $headers['Content-Type']);
         $timestamp = (int) $headers['X-Askdata-Timestamp'];
         $this->assertEqualsWithDelta(time(), $timestamp, 5);
-        $this->assertSame(signer::sign(self::SECRET, $timestamp, $request['body']), $headers['X-Askdata-Signature']);
+        $this->assertSame(signer::sign(self::SECRET, 'POST', '/ask', $timestamp, $request['body']), $headers['X-Askdata-Signature']);
         $this->assertStringNotContainsString(self::SECRET, implode("\n", $request['headers']) . $request['body']);
 
         $events = array_values(array_filter($sink->get_events(), fn($e) => $e instanceof question_asked));
@@ -325,7 +325,7 @@ final class ask_test extends \advanced_testcase {
     /**
      * The external function releases the session lock while it waits for the service.
      */
-    public function test_function_uses_a_readonly_session(): void {
+    public function test_function_declares_a_readonly_session(): void {
         $info = external_api::external_function_info('local_askdata_ask');
         $this->assertTrue($info->readonlysession);
     }

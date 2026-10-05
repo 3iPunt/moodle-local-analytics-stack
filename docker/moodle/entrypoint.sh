@@ -67,6 +67,7 @@ write_config() {
         $out .= "\$CFG->routerconfigured = true;\n";
         $out .= "\$CFG->disableupdatenotifications = true;\n";
         $out .= "\$CFG->disableupdateautodeploy = true;\n";
+        $out .= "\$CFG->enable_read_only_sessions = true;\n";
         $out .= "\$CFG->phpunit_prefix = \"phpu_\";\n";
         $out .= "\$CFG->phpunit_dataroot = \"/var/www/phpunitdata\";\n\n";
         $out .= "require_once(__DIR__ . \"/lib/setup.php\");\n";
@@ -110,6 +111,31 @@ upgrade_if_needed() {
     fi
 }
 
+# enable_read_only_sessions refuses to start a session that holds session-mode caches, so the
+# session-mode default store must be a file store instead of cachestore_session. Idempotent.
+map_session_caches_outside_session() {
+    log "Mapping session-mode caches to the file store (read-only sessions)"
+    as_www php -r '
+        define("CLI_SCRIPT", true);
+        require "/var/www/html/config.php";
+        $writer = \core_cache\config_writer::instance();
+        $current = [];
+        foreach ($writer->get_mode_mappings() as $m) {
+            $current[$m["mode"]][] = $m["store"];
+        }
+        if (($current[\core_cache\store::MODE_SESSION] ?? []) === ["default_application"]) {
+            exit(0);
+        }
+        $writer->set_mode_mappings([
+            \core_cache\store::MODE_APPLICATION => $current[\core_cache\store::MODE_APPLICATION] ?? ["default_application"],
+            \core_cache\store::MODE_SESSION => ["default_application"],
+            \core_cache\store::MODE_REQUEST => $current[\core_cache\store::MODE_REQUEST] ?? ["default_request"],
+        ]);
+        purge_all_caches();
+        echo "session-mode caches now use default_application\n";
+    ' || log "WARNING: could not map session caches; logins fail while enable_read_only_sessions is on"
+}
+
 # Idempotent; a missing secret must not keep Moodle down, so failures only warn.
 configure_askdata() {
     local script=/opt/stack/scripts/configure-askdata.sh
@@ -143,6 +169,7 @@ case "${1:-}" in
     apache2-foreground)
         install_if_needed
         upgrade_if_needed
+        map_session_caches_outside_session
         configure_askdata
         exec moodle-docker-php-entrypoint "$@"
         ;;

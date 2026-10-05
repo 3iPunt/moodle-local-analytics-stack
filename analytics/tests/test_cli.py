@@ -12,8 +12,8 @@ SCOPE = ["DA101", "PROG101", "STAT201"]
 
 def test_sign_matches_the_documented_contract():
     body = b'{"question": "q"}'
-    expected = hmac.new(b"k", b"1700000000\n" + body, hashlib.sha256).hexdigest()
-    assert sign("k", 1700000000, body) == expected
+    expected = hmac.new(b"k", b"POST\n/ask\n1700000000\n" + body, hashlib.sha256).hexdigest()
+    assert sign("k", "post", "/ask", 1700000000, body) == expected
 
 
 def test_cli_user_ref_is_valid_hex():
