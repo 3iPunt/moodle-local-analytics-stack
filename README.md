@@ -319,4 +319,4 @@ docs/                 plan, demo data, API, plugin, security, benchmark
 
 ## License
 
-The `local_askdata` plugin is GNU GPL v3 or later, like Moodle. The rest of the repository has no license file yet: choose a license before publishing it.
+The whole repository is licensed under the GNU General Public License v3.0 or later, like Moodle itself. See [LICENSE](LICENSE).
